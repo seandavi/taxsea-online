@@ -1,0 +1,102 @@
+name: Deploy
+
+# Ships the entire Cloudflare side in one `wrangler deploy` from /edge: the Worker,
+# JobCoordinatorDO, the compute container image, R2 bindings, and the built SPA
+# (edge/wrangler.toml [assets] -> ../frontend/dist, so the frontend build must run
+# first). Only the two triggers below -- deliberately no trigger for external/fork
+# proposed-change events -- which is what structurally keeps fork contributions from
+# ever reaching CLOUDFLARE_API_TOKEN. See .github/workflows/README.md and docs/infra.md.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    environment: production
+    # The first container build pulls a multi-GB Bioconductor base image (worker/README.md).
+    # Steady-state deploys are much faster once the image is cached, but Docker's local
+    # build cache is not guaranteed to survive between separate ubuntu-latest runner
+    # instances, so treat every run as a potential cold build.
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            edge/package-lock.json
+
+      # GitHub's ubuntu-latest runner images ship Docker Engine + the buildx plugin
+      # preinstalled (actions/runner-images); `wrangler deploy` shells out to Docker to
+      # build the container image itself, so no separate docker/setup-buildx-action step
+      # is needed here -- just confirm the preinstalled tooling is actually present.
+      - name: Verify Docker is available
+        run: |
+          docker version
+          docker buildx version
+
+      # edge/wrangler.toml's [assets] binding serves ../frontend/dist -- it must exist,
+      # built for real (not the empty placeholder ci-js.yml uses), before `wrangler deploy`.
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install edge dependencies
+        working-directory: edge
+        run: npm ci
+
+      - name: Typecheck edge
+        working-directory: edge
+        run: npm run typecheck
+
+      # A broken build must not reach production.
+      - name: Test edge
+        working-directory: edge
+        run: npm run test
+
+      - name: Deploy
+        working-directory: edge
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler deploy | tee deploy-output.txt
+
+      # No routes/custom domain is configured in edge/wrangler.toml, so Cloudflare
+      # assigns the default <name>.<subdomain>.workers.dev URL -- captured from the
+      # deploy step's own output rather than guessed/hardcoded.
+      - name: Post-deploy health check
+        working-directory: edge
+        run: |
+          URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy-output.txt | head -1)
+          if [ -z "$URL" ]; then
+            echo "Could not find deployed Worker URL in wrangler deploy output" >&2
+            exit 1
+          fi
+          echo "Checking $URL/api/health"
+          RESPONSE=$(curl -sS -w '\n%{http_code}' "$URL/api/health")
+          STATUS=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          echo "$BODY"
+          if [ "$STATUS" != "200" ] || ! echo "$BODY" | grep -q "Healthy"; then
+            echo "Health check failed: status=$STATUS" >&2
+            exit 1
+          fi

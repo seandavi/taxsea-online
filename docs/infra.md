@@ -100,6 +100,13 @@ Worker side and the container side atomically. There is no window where the two 
 different values, because the container-side value is never stored anywhere; it is only ever
 handed to the container process at start time.
 
+**`.github/workflows/deploy.yml` (issue #20) never runs `wrangler secret put`.** It only
+deploys code (`wrangler deploy`), so `WORKER_SHARED_SECRET` must already exist as a Worker
+secret before the first deploy from that workflow can succeed — set it once, out of band,
+with the `wrangler secret put WORKER_SHARED_SECRET` command above (piping in the value read
+from `taxsea-worker-shared-secret-service-token`). A fresh environment is reproducible by
+running that one command before the first deploy; nothing in CI re-sets it on every run.
+
 ## 3. Cloudflare API token permissions for `wrangler deploy` (container/registry push)
 
 **Status: partially verified; full verification is deferred to the first real `wrangler
@@ -184,3 +191,31 @@ Every command above that reads a secret value pipes it directly into the next co
 terminal, committed, or written to `wrangler.toml` or any workflow file. `wrangler.toml`'s
 only reference to the secret is the *name* `WORKER_SHARED_SECRET`, set out-of-band with
 `wrangler secret put`.
+
+## 7. Manual deploy (equivalent to `deploy.yml`)
+
+`.github/workflows/deploy.yml` (issue #20) is exactly this sequence automated; a human can
+run the same deploy from a workstation with no GitHub Actions involved:
+
+```bash
+# 1. Auth to Cloudflare (once per shell, or export CLOUDFLARE_API_TOKEN instead of
+#    running the interactive login):
+npx wrangler login
+# -- or --
+export CLOUDFLARE_API_TOKEN=$(gcloud secrets versions access latest \
+  --secret=cdsci-cloudflare-workers-token --project=cdsci-infra)
+
+# 2. Build the SPA -- edge/wrangler.toml's [assets] binding serves ../frontend/dist,
+#    so it must exist and be current before deploying:
+cd frontend && npm ci && npm run build && cd ..
+
+# 3. Deploy everything -- Worker, JobCoordinatorDO, the container image (built by a
+#    local Docker daemon, which must be running), R2 bindings, and the SPA assets --
+#    in one command:
+cd edge && npm ci && npx wrangler deploy
+```
+
+Requires a running local Docker daemon (`docker version` must succeed) for the container
+image build — same requirement `deploy.yml` has on the GitHub-hosted runner. Skips the
+`npm run typecheck` / `npm run test` gate the workflow enforces, so run those yourself first
+if you're deploying by hand. `WORKER_SHARED_SECRET` is unaffected either way — see §2.
