@@ -1,4 +1,5 @@
-import { Container } from "@cloudflare/containers";
+import { Container, type StopParams } from "@cloudflare/containers";
+import { log } from "./log";
 import type { ContainerRunResponse, JobPayload, JobState } from "./types";
 
 const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -126,7 +127,10 @@ function broadcast(deps: JobCoordinatorDeps, state: JobState): void {
         ws.close(1000);
       }
     } catch (err) {
-      console.error(`[${state.jobId}] failed to broadcast job state to a WebSocket, closing it:`, err);
+      log("job-coordinator", "error", "failed to broadcast job state to a WebSocket, closing it", {
+        jobId: state.jobId,
+        error: err instanceof Error ? err.message : String(err),
+      });
       try {
         ws.close();
       } catch {
@@ -149,7 +153,9 @@ export function handleWebSocketClose(ws: WebSocket, code: number, reason: string
 }
 
 export function handleWebSocketError(_ws: WebSocket, error: unknown): void {
-  console.error("JobCoordinatorDO WebSocket error:", error);
+  log("job-coordinator", "error", "WebSocket error", {
+    error: error instanceof Error ? error.message : String(error),
+  });
 }
 
 async function handleDispatch(deps: JobCoordinatorDeps, request: Request): Promise<Response> {
@@ -180,16 +186,24 @@ async function handleDispatch(deps: JobCoordinatorDeps, request: Request): Promi
   const state: JobState = { jobId, status: "running", createdAt: now, startedAt: now };
   await deps.storage.put(STATE_KEY, state);
   await deps.schedule(deps.env.JOB_TIMEOUT_MS / 1000, "onJobTimeout");
+  log("job-coordinator", "info", "job submitted", { jobId, elapsedMs: Date.now() - now });
 
   // Runs after the response below is returned; waitUntil keeps the DO alive for it even if
   // the client disconnects immediately (PLAN.md #1.3, "fire-and-forget dispatch can
   // vanish"). The timeout schedule armed above is the backstop if the DO is evicted anyway.
-  deps.waitUntil(runJob(deps, jobId, payload));
+  deps.waitUntil(runJob(deps, jobId, payload, now));
 
   return Response.json(state, { status: 201 });
 }
 
-export async function runJob(deps: JobCoordinatorDeps, jobId: string, payload: JobPayload): Promise<void> {
+export async function runJob(
+  deps: JobCoordinatorDeps,
+  jobId: string,
+  payload: JobPayload,
+  createdAt: number,
+): Promise<void> {
+  log("job-coordinator", "info", "container call started", { jobId, elapsedMs: Date.now() - createdAt });
+
   let response: Response;
   try {
     // containerFetch, not this.fetch -- this.fetch is overridden above and would recurse.
@@ -199,14 +213,28 @@ export async function runJob(deps: JobCoordinatorDeps, jobId: string, payload: J
       body: JSON.stringify({ jobId, ...payload }),
     });
   } catch (err) {
-    console.error(`[${jobId}] containerFetch threw -- infrastructure failure:`, err);
+    log("job-coordinator", "error", "container call failed: containerFetch threw -- infrastructure failure", {
+      jobId,
+      elapsedMs: Date.now() - createdAt,
+      error: err instanceof Error ? err.message : String(err),
+    });
     await finalizeState(deps, { status: "failed", error: "The compute container could not be reached." });
     return;
   }
 
+  log("job-coordinator", "info", "container call returned", {
+    jobId,
+    elapsedMs: Date.now() - createdAt,
+    status: response.status,
+  });
+
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    console.error(`[${jobId}] containerFetch returned ${response.status} -- infrastructure failure: ${detail}`);
+    // Not logging response body content -- it's arbitrary container-generated text.
+    log("job-coordinator", "error", "container call returned non-2xx -- infrastructure failure", {
+      jobId,
+      elapsedMs: Date.now() - createdAt,
+      status: response.status,
+    });
     await finalizeState(deps, { status: "failed", error: "The compute container returned an unexpected error." });
     return;
   }
@@ -215,7 +243,11 @@ export async function runJob(deps: JobCoordinatorDeps, jobId: string, payload: J
   try {
     result = await response.json();
   } catch (err) {
-    console.error(`[${jobId}] container response was not valid JSON -- infrastructure failure:`, err);
+    log("job-coordinator", "error", "container response was not valid JSON -- infrastructure failure", {
+      jobId,
+      elapsedMs: Date.now() - createdAt,
+      error: err instanceof Error ? err.message : String(err),
+    });
     await finalizeState(deps, { status: "failed", error: "The compute container returned an unexpected response." });
     return;
   }
@@ -232,8 +264,14 @@ export async function runJob(deps: JobCoordinatorDeps, jobId: string, payload: J
 
   if (result.status === "failed") {
     // HTTP 200 + status: "failed" is a job-level failure (the analysis ran and failed),
-    // distinct from the infrastructure failures logged above (docs/api.md #2).
-    console.error(`[${jobId}] job failed inside the container: ${result.error}`);
+    // distinct from the infrastructure failures logged above (docs/api.md #2). Not logging
+    // result.error itself -- an R error can echo submitted input content (docs/api.md #6).
+    log("job-coordinator", "error", "job failed inside the container", {
+      jobId,
+      elapsedMs: Date.now() - createdAt,
+      executionTimeMs: result.executionTimeMs,
+      errorLength: result.error.length,
+    });
     await finalizeState(deps, {
       status: "failed",
       error: sanitizeError(result.error),
@@ -242,7 +280,10 @@ export async function runJob(deps: JobCoordinatorDeps, jobId: string, payload: J
     return;
   }
 
-  console.error(`[${jobId}] container returned an unrecognized response shape:`, result);
+  log("job-coordinator", "error", "container returned an unrecognized response shape", {
+    jobId,
+    elapsedMs: Date.now() - createdAt,
+  });
   await finalizeState(deps, { status: "failed", error: "The compute container returned an unexpected response." });
 }
 
@@ -266,6 +307,11 @@ async function finalizeState(
   await deps.storage.put(STATE_KEY, finalState);
   deps.deleteSchedules("onJobTimeout");
   await deps.schedule(CLEANUP_DELAY_SECONDS, "onCleanup");
+  log("job-coordinator", "info", "terminal state", {
+    jobId: finalState.jobId,
+    status: finalState.status,
+    elapsedMs: finishedAt - state.createdAt,
+  });
   broadcast(deps, finalState);
 }
 
@@ -288,6 +334,12 @@ async function handleState(deps: JobCoordinatorDeps): Promise<Response> {
  */
 export async function onJobTimeout(deps: JobCoordinatorDeps): Promise<void> {
   const state = await deps.storage.get<JobState>(STATE_KEY);
+  log(
+    "job-coordinator",
+    "info",
+    "alarm fired",
+    state ? { jobId: state.jobId, elapsedMs: Date.now() - state.createdAt } : {},
+  );
   if (!state || state.status !== "running") return; // already finalized
 
   const timeoutSeconds = Math.round(deps.env.JOB_TIMEOUT_MS / 1000);
@@ -305,6 +357,11 @@ export async function onJobTimeout(deps: JobCoordinatorDeps): Promise<void> {
   // just resubmits. Recovery-by-scanning-R2 is a deliberate v1 ceiling, not an oversight
   // (PLAN.md #2.6); add it if lost in-flight jobs become a real support burden.
   await deps.schedule(CLEANUP_DELAY_SECONDS, "onCleanup");
+  log("job-coordinator", "info", "terminal state", {
+    jobId: finalState.jobId,
+    status: finalState.status,
+    elapsedMs: finishedAt - state.createdAt,
+  });
   broadcast(deps, finalState);
 }
 
@@ -366,6 +423,34 @@ export class JobCoordinatorDO extends Container<Env> {
 
   async onCleanup(): Promise<void> {
     await onCleanup(this.deps());
+  }
+
+  /** Container boot time dominates job latency, so this is the most useful timing number
+   * in the whole system: elapsed time from job creation to the container reporting ready. */
+  async onStart(): Promise<void> {
+    const state = await this.ctx.storage.get<JobState>(STATE_KEY);
+    log(
+      "container",
+      "info",
+      "container started",
+      state ? { jobId: state.jobId, elapsedMs: Date.now() - state.createdAt } : {},
+    );
+  }
+
+  async onStop(params: StopParams): Promise<void> {
+    const state = await this.ctx.storage.get<JobState>(STATE_KEY);
+    log("container", "info", "container stopped", {
+      ...(state ? { jobId: state.jobId, elapsedMs: Date.now() - state.createdAt } : {}),
+      exitCode: params.exitCode,
+      reason: params.reason,
+    });
+  }
+
+  onError(error: unknown): unknown {
+    log("container", "error", "container error", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error; // preserve the base class's default behavior of rethrowing
   }
 
   // Hibernation API handlers -- see `handleWebSocketMessage` et al above. Server-push only,

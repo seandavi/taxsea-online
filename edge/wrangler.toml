@@ -60,6 +60,12 @@ not_found_handling = "single-page-application"
 JOB_TIMEOUT_MS = 300000
 MAX_TAXA = 5000
 
+# Makes Worker and container stdout/stderr queryable via `wrangler tail` and the dashboard's
+# Logs view -- required for the structured JSON logs from src/log.ts and main.py to be
+# findable in production (docs/development.md, issue #22).
+[observability]
+enabled = true
+
 # The only secret this project uses. Set with `wrangler secret put WORKER_SHARED_SECRET`
 # -- never committed. Forwarded to the container via JobCoordinatorDO's envVars.
 # No R2 credentials are configured anywhere: the Worker and DO use the native R2

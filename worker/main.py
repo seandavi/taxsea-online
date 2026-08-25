@@ -28,8 +28,32 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, model_validator
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("taxsea-worker")
+
+
+def _log(level: int, msg: str, **fields: object) -> None:
+    """Structured single-line JSON logging (issue #22): builds the JSON line directly and
+    hands it to stdlib `logging` as the whole message, with `format="%(message)s"` above so
+    nothing gets wrapped or double-escaped -- no logging framework, just stdlib.
+
+    Never pass user-supplied content (taxa, ranks, request/response bodies) in `fields` --
+    log counts/sizes instead. The one deliberate exception is sanitized R stderr on failure
+    (see `_sanitize_error`), which the caller must sanitize before passing here.
+    """
+    logger.log(
+        level,
+        json.dumps(
+            {
+                "ts": int(time.time() * 1000),
+                "level": logging.getLevelName(level).lower(),
+                "component": "worker",
+                "msg": msg,
+                **fields,
+            }
+        ),
+    )
+
 
 # --- Config: read once at import, fail fast if a required var is missing -----------------
 WORKER_SHARED_SECRET = os.environ["WORKER_SHARED_SECRET"]
@@ -74,7 +98,15 @@ async def _malformed_body(request: Request, exc: RequestValidationError) -> JSON
 
 
 def _sanitize_error(text: str) -> str:
-    """Truncate to 2000 chars and strip absolute paths; R errors can echo input content."""
+    """Truncate to 2000 chars, strip absolute paths, and redact the shared secret.
+
+    R errors can echo input content or filesystem paths. The secret redaction is
+    defense-in-depth for a subtler leak: the Rscript subprocess inherits this process's
+    full environment (including WORKER_SHARED_SECRET) by default, so a buggy or malicious
+    worker.R that dumps its environment on error could otherwise put the secret into
+    stderr -- which this function's caller logs on failure (issue #22).
+    """
+    text = text.replace(WORKER_SHARED_SECRET, "[redacted]")
     return _ABS_PATH_RE.sub("<path>", text)[:MAX_ERROR_LEN]
 
 
@@ -136,6 +168,15 @@ def _failure(job_id: str, execution_time_ms: int, error: str) -> dict:
 def run(payload: RunRequest, authorization: str | None = Header(default=None)) -> dict:
     _check_auth(authorization)
     job_id = payload.jobId
+    # Counts, never the taxa/ranks themselves (docs/api.md #6, issue #22).
+    _log(
+        logging.INFO,
+        "job received",
+        jobId=job_id,
+        mode=payload.mode,
+        **({"taxaCount": len(payload.taxa)} if payload.taxa is not None else {}),
+        **({"ranksCount": len(payload.ranks)} if payload.ranks is not None else {}),
+    )
 
     with tempfile.TemporaryDirectory() as tmpdir:
         input_path = Path(tmpdir) / "input.json"
@@ -143,6 +184,7 @@ def run(payload: RunRequest, authorization: str | None = Header(default=None)) -
         input_path.write_text(payload.model_dump_json(exclude_none=True))
 
         start = time.monotonic()
+        _log(logging.INFO, "Rscript started", jobId=job_id)
         try:
             proc = subprocess.run(
                 ["Rscript", str(WORKER_R_PATH), str(input_path), str(output_path)],
@@ -153,7 +195,13 @@ def run(payload: RunRequest, authorization: str | None = Header(default=None)) -
             )
         except subprocess.TimeoutExpired:
             execution_time_ms = int((time.monotonic() - start) * 1000)
-            logger.error("jobId=%s Rscript timed out after %ss", job_id, RSCRIPT_TIMEOUT_SECONDS)
+            _log(
+                logging.ERROR,
+                "Rscript exited: timed out",
+                jobId=job_id,
+                durationMs=execution_time_ms,
+                timeoutSeconds=RSCRIPT_TIMEOUT_SECONDS,
+            )
             return _failure(
                 job_id,
                 execution_time_ms,
@@ -163,7 +211,16 @@ def run(payload: RunRequest, authorization: str | None = Header(default=None)) -
         execution_time_ms = int((time.monotonic() - start) * 1000)
 
         if proc.returncode != 0:
-            logger.error("jobId=%s Rscript exited %s", job_id, proc.returncode)
+            # Truncated to 2000 chars with absolute paths stripped by _sanitize_error, reused
+            # from the client-facing error below (docs/api.md #6, issue #22).
+            _log(
+                logging.ERROR,
+                "Rscript exited",
+                jobId=job_id,
+                exitCode=proc.returncode,
+                durationMs=execution_time_ms,
+                stderr=_sanitize_error(proc.stderr or "(no stderr)"),
+            )
             return _failure(
                 job_id,
                 execution_time_ms,
@@ -172,17 +229,38 @@ def run(payload: RunRequest, authorization: str | None = Header(default=None)) -
                 ),
             )
 
+        _log(
+            logging.INFO,
+            "Rscript exited",
+            jobId=job_id,
+            exitCode=proc.returncode,
+            durationMs=execution_time_ms,
+        )
+
         try:
-            output = json.loads(output_path.read_text())
+            raw_output = output_path.read_text()
+            output = json.loads(raw_output)
         except (FileNotFoundError, json.JSONDecodeError) as exc:
-            logger.error("jobId=%s output file missing or unparseable: %s", job_id, exc)
+            _log(
+                logging.ERROR,
+                "result returned: output file missing or unparseable",
+                jobId=job_id,
+                error=str(exc),
+            )
             return _failure(
                 job_id,
                 execution_time_ms,
                 _sanitize_error(f"Worker output file missing or unparseable: {exc}"),
             )
 
-    logger.info("jobId=%s completed in %sms", job_id, execution_time_ms)
+    _log(
+        logging.INFO,
+        "result returned",
+        jobId=job_id,
+        status=output.get("status") if isinstance(output, dict) else None,
+        executionTimeMs=execution_time_ms,
+        resultBytes=len(raw_output),
+    )
     return output
 
 
