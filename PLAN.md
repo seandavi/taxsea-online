@@ -436,3 +436,74 @@ if it becomes real, surface an "N of M taxa matched" count in the results view.
 **Cost of a public compute endpoint.** Three layers: IP rate limiting at the edge,
 `max_instances` as the hard ceiling on concurrent containers, and short `sleepAfter` so
 nothing idles. Turnstile is the next lever if those prove insufficient.
+
+---
+
+## 8. Post-launch decisions
+
+M1–M7 shipped, deployed to `https://taxsea-online.seandavi.workers.dev`, and were verified
+end-to-end against production via `e2e/smoke.ts` (issue #23). Everything below happened after
+that first real deploy — real decisions worth keeping, not the ephemeral state of any one
+session (see `.claude/handoffs/` for that).
+
+### 8.1 Frontend dependency policy reversed for publication-quality polish
+
+§2.5 ("no dependencies beyond the essentials") was a v1-launch constraint, not a permanent
+one. Once the app was live and the plan turned to accompanying a publication, the maintainer
+explicitly approved pulling in best-in-breed frontend dependencies for polish: **Tailwind
+CSS** (issue #53, replacing the hand-rolled `index.css`), **TanStack Table** (issue #54,
+replacing the hand-rolled sort/filter in `ResultTable.tsx`), and **react-router** (issue #51,
+for a real bookmarkable `/about` URL — chosen over a state toggle specifically because the
+page is meant to be linked from docs/a paper). Radix UI's Tabs primitive is queued for issue
+#55. This does not reopen the backend policy (§2.5's "no monorepo tool, no logging
+framework" reasoning for `/edge` and `/worker` still holds) — it's scoped to `/frontend`
+presentation only.
+
+### 8.2 A live persona-review panel found real bugs, not just polish gaps
+
+Six parallel review agents (bioinformatician, microbiome expert, UI/UX/IA expert, BugSigDB
+steward, security, publication-readiness) drove the *live deployed app*, not the source, and
+converged on genuine correctness problems: taxa silently going unmatched with no warning
+(§7's "Taxon name matching" risk, above — this is that risk landing for real, not just a
+possibility); an input parser that silently ranks by the wrong column on realistic
+multi-column pasted input (e.g. DESeq2 output); per-collection FDR correction producing two
+different values for the same taxon set depending which tab you're looking at, unexplained;
+and BugSigDB — a named headline database — silently returning zero results in every
+configuration (root-caused directly against the built image: TaxSEA needs the separate
+`bugsigdbr` package at analysis time and the Dockerfile never installed it — see issue #61).
+
+All findings became milestones M9 (scientific correctness & reliability) → M10 (security
+hardening) → M11 (results UX/IA, supersedes/extends #55) → M12 (data provenance &
+attribution) → M13 (publication readiness — deliberately sequenced *last*: don't cut a
+citable `v1.0.0`/Zenodo release until the M9 correctness bugs are fixed, or the archived
+version is wrong on day one). This ordering is a deliberate decision, not just a numbering
+convenience — a fresh session picking up this backlog should follow it rather than starting
+wherever looks easiest.
+
+### 8.3 Two production bugs only a live test caught
+
+Both were invisible to the full unit/integration test suite and only surfaced by running
+`e2e/smoke.ts` against the real deployment — worth knowing about as a class of bug this
+architecture is prone to, not just as closed issues:
+
+- `forwardToDO()` in `edge/src/index.ts` rewrote the internal DO request to a placeholder
+  origin (`http://do${path}`). `JobCoordinatorDO`'s own `Origin`-header check
+  (`new URL(request.url).origin`) then compared a real client's `Origin` against a value
+  that could never match, 403-ing every WebSocket connection in production. Unit tests never
+  caught it because they call `handleFetch`/`handleRequest` directly with a real URL, never
+  through that rewrite. Fixed by preserving the real origin and only swapping the pathname.
+- `JobCoordinatorDO`'s call to the container's `POST /run` never set
+  `Content-Type: application/json` — only `Authorization`. FastAPI/Starlette silently fails
+  to parse the body into the `RunRequest` pydantic model without it, so every real job hit a
+  400. Reproduced by POSTing the identical body with/without the header against the built
+  image.
+
+Lesson encoded in the working pattern now: after any `edge`/`worker` deploy, always re-run
+`e2e/smoke.ts` against the live URL before calling it done — the deploy workflow's own
+post-deploy health check does not exercise the WebSocket or job-dispatch paths at all.
+
+### 8.4 Branding/domain decision deferred, deliberately
+
+Parking the service under `cancerdatasci.org` was considered and explicitly deferred pending
+an ongoing discussion outside this repo. The service stays on the default `*.workers.dev` URL
+for now; don't revisit this unilaterally.
