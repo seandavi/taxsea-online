@@ -116,7 +116,15 @@ endpoint is the only way to fetch a result.
 
 **Responses:**
 
-- `200 OK` — body is the `output.json` envelope (§5), `Content-Type: application/json`.
+- `200 OK` — body is the `output.json` envelope (§5), `Content-Type: application/json`,
+  `Cache-Control: private, no-store`.
+
+  The object is immutable once written, but it is deliberately **not** cached publicly
+  (issue #68). Submissions may be unpublished research data, and a shared proxy or browser
+  disk cache holding a copy would outlive the 7-day R2 retention `docs/infra.md` promises —
+  the retention guarantee has to hold end-to-end, not just in the bucket. `GET
+  /api/jobs/:jobId/state` likewise sends `Cache-Control: no-store`, since job status is
+  mutable.
 - `404 Not Found` — the job does not exist, or exists but has not reached `completed` (no
   object has been written to R2 yet — poll `/state` or listen on `/ws` first).
 
