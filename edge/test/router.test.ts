@@ -270,5 +270,9 @@ describe("unmatched routes", () => {
     const csp = response.headers.get("Content-Security-Policy");
     expect(csp).toBeTruthy();
     expect(csp).not.toMatch(/script-src[^;]*unsafe-inline/);
+    // The GA4 loader tag in frontend/index.html is dead weight without this host, and it
+    // fails silently in the browser console -- pin it so a CSP tightening can't quietly
+    // switch analytics off.
+    expect(csp).toMatch(/script-src[^;]*https:\/\/www\.googletagmanager\.com/);
   });
 });
