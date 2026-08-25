@@ -1,0 +1,5 @@
+# No boto3: the container has no cloud access. The Durable Object (edge/) does all R2 I/O
+# and passes payloads to/from the container by value (see PLAN.md §2.6).
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4

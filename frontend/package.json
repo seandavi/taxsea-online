@@ -1,0 +1,12 @@
+{
+  "name": "@taxsea/frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "lint": "echo 'lint: no-op (scaffolding, M1) — wired up when src/ lands' && exit 0",
+    "typecheck": "echo 'typecheck: no-op (scaffolding, M1) — wired up when src/ lands' && exit 0",
+    "test": "echo 'test: no-op (scaffolding, M1) — wired up when src/ lands' && exit 0",
+    "build": "echo 'build: no-op (scaffolding, M1) — wired up when src/ lands' && exit 0"
+  }
+}
