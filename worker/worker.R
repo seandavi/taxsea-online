@@ -59,6 +59,24 @@ main <- function(argv) {
     ranks <- payload$ranks
     taxon_ranks <- as.numeric(ranks)
     names(taxon_ranks) <- names(ranks)
+    input_names <- names(taxon_ranks)
+  } else if (identical(mode, "ora")) {
+    # TaxSEA de-duplicates input_taxa internally, so count the same way it does.
+    input_names <- unique(as.character(payload$taxa))
+  } else {
+    stop(paste0("Unsupported mode: ", mode))
+  }
+
+  match_report <- report_matches(input_names)
+  # docs/api.md §6 documents this exact failure string, but nothing ever emitted it: a run
+  # where no taxon was recognized returned status "completed" with zero rows in every
+  # collection and no warning anywhere (issue #64). Genus-only names and MetaPhlAn's
+  # `s__`-prefixed names both land here, so this is the common case, not an edge case.
+  if (match_report$matched == 0) {
+    stop("No input taxa matched the TaxSEA reference database")
+  }
+
+  if (identical(mode, "enrichment")) {
     res <- TaxSEA(
       taxon_ranks = taxon_ranks,
       mode = "enrichment",
@@ -76,8 +94,6 @@ main <- function(argv) {
       lookup_missing = FALSE,
       custom_db = NULL
     )
-  } else {
-    stop(paste0("Unsupported mode: ", mode))
   }
 
   execution_time_ms <- as.integer(round(as.numeric(Sys.time() - start_time, units = "secs") * 1000))
@@ -89,7 +105,8 @@ main <- function(argv) {
     taxsea = list(
       packageVersion = as.character(utils::packageVersion("TaxSEA")),
       mode = mode,
-      params = list(minSetSize = min_set_size, maxSetSize = max_set_size)
+      params = list(minSetSize = min_set_size, maxSetSize = max_set_size),
+      input = match_report
     ),
     results = build_results(res)
   )
@@ -100,6 +117,35 @@ main <- function(argv) {
     auto_unbox = TRUE,
     digits = NA,
     na = "null"
+  )
+}
+
+# How many of the submitted taxon names TaxSEA can actually recognize, and which ones it
+# can't (issue #64).
+#
+# TaxSEA's reference sets are keyed by NCBI taxon ID, not by name; taxsea_prepare() maps
+# names to IDs through the bundled `NCBI_ids` vector and silently drops anything absent
+# from it (`names(taxon_ranks) %in% names(NCBI_ids)`, and the same test on input_taxa in
+# ORA mode). That membership test is therefore the definition of "matched" here -- this
+# mirrors taxsea_prepare() rather than guessing, and lookup_missing = FALSE at both call
+# sites means no network lookup can widen it behind our back.
+#
+# The unmatched list is capped: MAX_TAXA is 5000, and a payload of entirely unrecognized
+# names would otherwise put 5000 strings in every envelope. Callers wanting the true count
+# of dropped names take submitted - matched, which is never truncated.
+UNMATCHED_SAMPLE_LIMIT <- 100
+
+report_matches <- function(input_names) {
+  utils::data("NCBI_ids", package = "TaxSEA", envir = environment())
+  recognized <- input_names %in% names(NCBI_ids)
+  unmatched <- input_names[!recognized]
+  list(
+    submitted = length(input_names),
+    matched = sum(recognized),
+    # I() keeps jsonlite from unboxing a single unmatched name into a bare string, so the
+    # field is always an array.
+    unmatched = I(utils::head(unmatched, UNMATCHED_SAMPLE_LIMIT)),
+    unmatchedTruncated = length(unmatched) > UNMATCHED_SAMPLE_LIMIT
   )
 }
 

@@ -128,4 +128,73 @@ stopifnot(
 )
 cat("NA/NaN/Inf/-Inf all serialized as null; 1e-12 in the same batch stayed intact.\n")
 
+# --- issue #64: matched/unmatched reporting, and the documented no-match failure ---------
+# TaxSEA silently drops any name absent from its bundled NCBI_ids mapping, so a run of
+# genus-only or MetaPhlAn s__-prefixed names used to come back "completed" with zero rows
+# everywhere and no warning at all. Both halves are checked: the count on a partial match,
+# and the hard failure when nothing matches.
+
+check_input_report <- function(out, expected_submitted) {
+  rep <- out$taxsea$input
+  stopifnot(
+    "taxsea.input missing from the envelope" = !is.null(rep),
+    "taxsea.input.submitted wrong" = identical(as.integer(rep$submitted), as.integer(expected_submitted)),
+    "taxsea.input.matched must be numeric" = is.numeric(rep$matched),
+    "taxsea.input.matched cannot exceed submitted" = rep$matched <= rep$submitted,
+    "taxsea.input.unmatched must be a list" = is.list(rep$unmatched),
+    "unmatched count must equal submitted - matched (when not truncated)" =
+      isTRUE(rep$unmatchedTruncated) || length(rep$unmatched) == rep$submitted - rep$matched
+  )
+  rep
+}
+
+# Two real names plus two TaxSEA cannot resolve -- one nonsense, one s__-prefixed (the
+# MetaPhlAn convention named in issue #64).
+tmp_partial_in <- tempfile(fileext = ".json")
+tmp_partial_out <- tempfile(fileext = ".json")
+write_json(
+  list(
+    jobId = "test-partial",
+    mode = "ora",
+    taxa = c(
+      "Bifidobacterium_longum",
+      "Bacteroides_thetaiotaomicron",
+      "Blortococcus_fakeus",
+      "s__Escherichia_coli"
+    )
+  ),
+  tmp_partial_in,
+  auto_unbox = TRUE
+)
+run_worker(tmp_partial_in, tmp_partial_out)
+partial <- fromJSON(tmp_partial_out, simplifyVector = FALSE)
+rep <- check_input_report(partial, 4)
+stopifnot(
+  "the two resolvable names should have matched" = rep$matched == 2,
+  "s__-prefixed name must be reported as unmatched" =
+    "s__Escherichia_coli" %in% unlist(rep$unmatched)
+)
+cat(sprintf("input report: %d/%d matched, %d reported unmatched\n",
+            rep$matched, rep$submitted, length(rep$unmatched)))
+
+# Nothing matches -> must fail with the string docs/api.md 6 documents, not return an
+# empty "completed" envelope.
+tmp_none_in <- tempfile(fileext = ".json")
+tmp_none_out <- tempfile(fileext = ".json")
+write_json(
+  list(jobId = "test-none", mode = "ora",
+       taxa = c("s__Bifidobacterium_longum", "Blortococcus_fakeus")),
+  tmp_none_in,
+  auto_unbox = TRUE
+)
+none_lines <- system2("Rscript", c("worker.R", tmp_none_in, tmp_none_out), stderr = TRUE)
+none_status <- attr(none_lines, "status")
+stopifnot(
+  "an all-unmatched run must exit non-zero rather than complete empty" =
+    !is.null(none_status) && none_status != 0,
+  "stderr must carry the failure string documented in docs/api.md" =
+    any(grepl("No input taxa matched the TaxSEA reference database", none_lines, fixed = TRUE))
+)
+cat("all-unmatched input fails with the documented message\n")
+
 cat("All worker.R tests passed.\n")

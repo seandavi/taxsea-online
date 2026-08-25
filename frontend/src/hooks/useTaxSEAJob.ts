@@ -35,6 +35,15 @@ export interface TaxSEAOutput {
     packageVersion: string;
     mode: 'enrichment' | 'ora';
     params: { minSetSize: number; maxSetSize: number };
+    /** How many submitted names TaxSEA could resolve (issue #64). Optional: results stored
+     * in R2 before that change shipped don't carry it. */
+    input?: {
+      submitted: number;
+      matched: number;
+      /** Capped at 100 names by the worker; submitted - matched is the true dropped count. */
+      unmatched: string[];
+      unmatchedTruncated: boolean;
+    };
   };
   results: Record<string, TaxSEAResultCollection>;
 }
