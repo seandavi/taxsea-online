@@ -146,3 +146,72 @@ button[type='button'] {
   color: #d64545;
   font-weight: 600;
 }
+
+/* Results (issue #16). The scroll container is scoped to each table -- overflow-x lives here,
+   never on body, so wide tables never widen the page. */
+.job-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+  font-size: 0.875rem;
+}
+
+.job-meta dt {
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.job-meta dd {
+  margin: 0;
+}
+
+.result-table {
+  margin-top: 1.5rem;
+}
+
+.result-table-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: max-content;
+  font-size: 0.875rem;
+}
+
+th,
+td {
+  padding: 0.4rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+th button {
+  background: none;
+  border: none;
+  color: inherit;
+  font-weight: 600;
+  padding: 0;
+  cursor: pointer;
+  align-self: auto;
+}
+
+th[aria-sort='ascending'] button::after {
+  content: ' \25B2';
+}
+
+th[aria-sort='descending'] button::after {
+  content: ' \25BC';
+}
