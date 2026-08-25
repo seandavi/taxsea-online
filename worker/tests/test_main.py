@@ -243,3 +243,20 @@ def test_health_unhealthy(monkeypatch):
     assert resp.status_code == 503
     assert "TaxSEA" in resp.text
     assert "Healthy" not in resp.text
+
+
+def test_health_rscript_binary_missing(monkeypatch):
+    """A plain environment with no Rscript on PATH at all (e.g. this pytest run itself,
+    outside the container image) must not crash _check_taxsea() -- it's a startup-time
+    call, and a FileNotFoundError there would take down the whole app at import."""
+
+    def _raise(cmd, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "Rscript")
+
+    monkeypatch.setattr(main.subprocess, "run", _raise)
+    monkeypatch.setattr(main, "_TAXSEA_STATUS", main._check_taxsea())
+
+    resp = client.get("/health")
+
+    assert resp.status_code == 503
+    assert "Rscript" in resp.text
