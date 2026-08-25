@@ -1,0 +1,17 @@
+{
+  "mode": "ora",
+  "taxa": [
+    "Faecalibacterium_prausnitzii",
+    "Bacteroides_uniformis",
+    "Roseburia_hominis",
+    "Alistipes_putredinis",
+    "Bacteroides_dorei",
+    "Eubacterium_rectale",
+    "Fusicatenibacter_saccharivorans",
+    "Ruminococcus_gnavus",
+    "Dorea_longicatena",
+    "Agathobaculum_butyriciproducens",
+    "Blautia_obeum",
+    "Anaerostipes_hadrus"
+  ]
+}
