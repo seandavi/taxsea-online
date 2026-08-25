@@ -206,10 +206,27 @@ describe("POST /api/jobs success", () => {
 
 describe("unmatched routes", () => {
   it("falls through to env.ASSETS", async () => {
-    // frontend/dist isn't built in this test env, so ASSETS itself 404s -- this still proves
-    // the router forwarded rather than handling the path itself (it never touches R2/DO here).
-    const response = await handleRequest(new Request("https://example.com/some/spa/route"), env);
-    expect(response.status).toBe(404);
+    // A fake ASSETS binding, not the real one: whether the real ../frontend/dist has been
+    // built (and what env.ASSETS.fetch returns for an unmatched path -- 200 with the SPA
+    // shell via `not_found_handling = "single-page-application"`, or 404 if dist is an
+    // empty placeholder, as in ci-js.yml's edge job) is unrelated to what this test is
+    // checking: that the router forwards unmatched paths to ASSETS at all, rather than
+    // handling them itself or touching R2/DO.
+    let assetsCalled = false;
+    const fakeAssets = {
+      fetch: async () => {
+        assetsCalled = true;
+        return new Response("<html>the spa shell</html>", { headers: { "Content-Type": "text/html" } });
+      },
+    } as unknown as Env["ASSETS"];
+
+    const response = await handleRequest(
+      new Request("https://example.com/some/spa/route"),
+      { ...env, ASSETS: fakeAssets },
+    );
+
+    expect(assetsCalled).toBe(true);
+    expect(response.status).toBe(200);
   });
 
   it("adds security headers to an HTML response from ASSETS", async () => {
