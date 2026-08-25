@@ -4,6 +4,7 @@
 // its own file (issue #9).
 export { JobCoordinatorDO } from "./JobCoordinatorDO";
 
+import { handleHealth } from "./health";
 import { validateJobPayload } from "./schema";
 
 // docs/api.md #4.
@@ -145,6 +146,10 @@ const JOB_SUBROUTE_RE = /^\/api\/jobs\/([^/]+)\/(state|ws|result)$/;
  * against a fake stub while every other binding (R2, the rate limiter, ASSETS) stays real. */
 export async function handleRequest(request: Request, env: Env): Promise<Response> {
   const { pathname } = new URL(request.url);
+
+  if (pathname === "/api/health" && request.method === "GET") {
+    return handleHealth(env);
+  }
 
   if (pathname === "/api/jobs" && request.method === "POST") {
     return handleCreateJob(request, env);
