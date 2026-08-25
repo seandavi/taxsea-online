@@ -47,54 +47,71 @@ export default function ResultTable({ jobId, collectionName, collection }: Resul
   }
 
   return (
-    <section className="result-table">
-      <h3>{collectionName}</h3>
-      <div className="result-table-controls">
+    <section className="flex flex-col gap-3">
+      <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">{collectionName}</h3>
+      <div className="flex flex-wrap items-end gap-4">
         {hasTaxonFilter && (
-          <label>
+          <label className="flex flex-col gap-1 text-sm font-medium text-slate-900 dark:text-slate-100">
             Filter by taxon set name
             <input
               type="text"
               value={filterText}
               onChange={(e) => setFilterText(e.target.value)}
               placeholder="Filter…"
+              className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm font-normal text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             />
           </label>
         )}
-        <button type="button" onClick={() => downloadCollectionTSV(jobId, collectionName, collection)}>
+        <button
+          type="button"
+          onClick={() => downloadCollectionTSV(jobId, collectionName, collection)}
+          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+        >
           Download {collectionName} TSV
         </button>
       </div>
 
       {rows.length === 0 ? (
-        <p>No enriched sets</p>
+        <p className="text-sm text-slate-600 dark:text-slate-400">No enriched sets</p>
       ) : (
         <>
-          <div className="table-scroll">
-            <table>
-              <thead>
+          <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
+            <table className="w-full min-w-max border-collapse text-sm">
+              <thead className="bg-slate-50 dark:bg-slate-900">
                 <tr>
                   {columns.map((col) => (
-                    <th key={col} aria-sort={ariaSortFor(col)}>
-                      <button type="button" onClick={() => handleSort(col)}>
+                    <th
+                      key={col}
+                      aria-sort={ariaSortFor(col)}
+                      className="whitespace-nowrap border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-900 aria-[sort=ascending]:after:ml-1 aria-[sort=ascending]:after:content-['▲'] aria-[sort=descending]:after:ml-1 aria-[sort=descending]:after:content-['▼'] dark:border-slate-800 dark:text-slate-100"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleSort(col)}
+                        className="font-semibold hover:text-blue-600 dark:hover:text-blue-400"
+                      >
                         {col}
                       </button>
                     </th>
                   ))}
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
                 {sortedRows.map((row, i) => (
-                  <tr key={i}>
+                  <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-900/50">
                     {columns.map((col) => (
-                      <td key={col}>{formatCell(col, row[col])}</td>
+                      <td key={col} className="whitespace-nowrap px-3 py-2 text-slate-700 dark:text-slate-300">
+                        {formatCell(col, row[col])}
+                      </td>
                     ))}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          {sortedRows.length === 0 && <p>No rows match the filter.</p>}
+          {sortedRows.length === 0 && (
+            <p className="text-sm text-slate-600 dark:text-slate-400">No rows match the filter.</p>
+          )}
         </>
       )}
     </section>

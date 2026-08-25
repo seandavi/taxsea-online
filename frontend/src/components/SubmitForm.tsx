@@ -126,35 +126,43 @@ export default function SubmitForm({ onSubmitted }: SubmitFormProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit} noValidate>
-      <fieldset>
-        <legend>Analysis mode</legend>
-        <label>
+    <form onSubmit={handleSubmit} noValidate className="flex max-w-2xl flex-col gap-6">
+      <fieldset className="rounded-lg border border-slate-300 p-4 dark:border-slate-700">
+        <legend className="px-1 text-sm font-semibold text-slate-900 dark:text-slate-100">Analysis mode</legend>
+        <label className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
           <input
             type="radio"
             name="mode"
             value="enrichment"
             checked={mode === 'enrichment'}
             onChange={() => switchMode('enrichment')}
+            className="h-4 w-4 accent-blue-600 dark:accent-blue-400"
           />
           Enrichment
         </label>
-        <p className="mode-help">
+        <p className="mb-3 ml-6 mt-1 text-sm text-slate-600 dark:text-slate-400">
           Rank every taxon by a continuous statistic (e.g. log-fold-change) to test whether TaxSEA&apos;s
           taxon sets skew toward one end of the ranking.
         </p>
-        <label>
-          <input type="radio" name="mode" value="ora" checked={mode === 'ora'} onChange={() => switchMode('ora')} />
+        <label className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
+          <input
+            type="radio"
+            name="mode"
+            value="ora"
+            checked={mode === 'ora'}
+            onChange={() => switchMode('ora')}
+            className="h-4 w-4 accent-blue-600 dark:accent-blue-400"
+          />
           ORA (over-representation)
         </label>
-        <p className="mode-help">
+        <p className="ml-6 mt-1 text-sm text-slate-600 dark:text-slate-400">
           Give a flat list of taxa of interest (e.g. significantly changed) to test which TaxSEA taxon
           sets are over-represented among them.
         </p>
       </fieldset>
 
-      <div>
-        <label htmlFor="taxa-input">
+      <div className="flex flex-col gap-2">
+        <label htmlFor="taxa-input" className="text-sm font-semibold text-slate-900 dark:text-slate-100">
           {mode === 'enrichment' ? 'Taxon name and rank, one pair per line' : 'Taxon names, one per line'}
         </label>
         <textarea
@@ -168,31 +176,54 @@ export default function SubmitForm({ onSubmitted }: SubmitFormProps) {
               : 'Bifidobacterium_longum\nBacteroides_thetaiotaomicron'
           }
           spellCheck={false}
+          className="w-full resize-y rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm text-slate-900 placeholder:text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500"
         />
-        <p aria-live="polite">{parsed.count} taxa parsed</p>
-        <button type="button" onClick={loadExample}>
+        <p aria-live="polite" className="text-sm text-slate-600 dark:text-slate-400">
+          {parsed.count} taxa parsed
+        </p>
+        <button
+          type="button"
+          onClick={loadExample}
+          className="self-start rounded-md border border-blue-600 px-3 py-1.5 text-sm font-medium text-blue-600 hover:bg-blue-50 dark:border-blue-400 dark:text-blue-400 dark:hover:bg-blue-950/40"
+        >
           Load example data
         </button>
       </div>
 
       {parsed.errors.length > 0 && (
-        <ul className="parse-errors" aria-live="polite">
+        <ul
+          className="list-disc space-y-1 rounded-lg border border-red-300 bg-red-50 py-3 pl-9 pr-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300"
+          aria-live="polite"
+        >
           {parsed.errors.map((err) => (
             <li key={`${err.line}-${err.message}`}>
-              Line {err.line}: {err.message} (<code>{err.text}</code>)
+              Line {err.line}: {err.message} (
+              <code className="rounded bg-red-100 px-1 py-0.5 font-mono text-xs dark:bg-red-900/50">
+                {err.text}
+              </code>
+              )
             </li>
           ))}
         </ul>
       )}
 
-      <details>
-        <summary>Advanced options</summary>
-        <p>
-          TaxSEA ignores taxon sets smaller than <code>minSetSize</code> or larger than{' '}
-          <code>maxSetSize</code>. Both are clamped to the range {2}–{1000} server-side; leave blank to
-          use the server default.
+      <details className="rounded-lg border border-slate-300 p-4 dark:border-slate-700">
+        <summary className="cursor-pointer text-sm font-semibold text-slate-900 dark:text-slate-100">
+          Advanced options
+        </summary>
+        <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
+          TaxSEA ignores taxon sets smaller than{' '}
+          <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-xs dark:bg-slate-800">minSetSize</code>{' '}
+          or larger than{' '}
+          <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-xs dark:bg-slate-800">maxSetSize</code>.
+          Both are clamped to the range {2}–{1000} server-side; leave blank to use the server default.
         </p>
-        <label htmlFor="min-set-size">Minimum set size</label>
+        <label
+          htmlFor="min-set-size"
+          className="mt-3 block text-sm font-medium text-slate-900 dark:text-slate-100"
+        >
+          Minimum set size
+        </label>
         <input
           id="min-set-size"
           type="number"
@@ -201,8 +232,14 @@ export default function SubmitForm({ onSubmitted }: SubmitFormProps) {
           value={minSetSizeInput}
           onChange={(e) => setMinSetSizeInput(e.target.value)}
           onBlur={() => setMinSetSizeInput((v) => (v.trim() === '' ? v : String(clampSetSize(Number(v)))))}
+          className="mt-1 w-32 rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
         />
-        <label htmlFor="max-set-size">Maximum set size</label>
+        <label
+          htmlFor="max-set-size"
+          className="mt-3 block text-sm font-medium text-slate-900 dark:text-slate-100"
+        >
+          Maximum set size
+        </label>
         <input
           id="max-set-size"
           type="number"
@@ -211,26 +248,45 @@ export default function SubmitForm({ onSubmitted }: SubmitFormProps) {
           value={maxSetSizeInput}
           onChange={(e) => setMaxSetSizeInput(e.target.value)}
           onBlur={() => setMaxSetSizeInput((v) => (v.trim() === '' ? v : String(clampSetSize(Number(v)))))}
+          className="mt-1 w-32 rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
         />
       </details>
 
-      <div>
-        <button type="submit" disabled={disabledReason !== null}>
+      <div className="flex items-center gap-3">
+        <button
+          type="submit"
+          disabled={disabledReason !== null}
+          className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-blue-500 dark:hover:bg-blue-400"
+        >
           Submit
         </button>
-        {disabledReason && <p role="status">{disabledReason}</p>}
+        {disabledReason && (
+          <p role="status" className="text-sm text-slate-600 dark:text-slate-400">
+            {disabledReason}
+          </p>
+        )}
       </div>
 
       {submitError && (
-        <p role="alert">
+        <p
+          role="alert"
+          className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300"
+        >
           {submitError.field ? `${submitError.field}: ` : ''}
           {submitError.message}
         </p>
       )}
 
       {submitted && (
-        <p role="status">
-          Job submitted: <code>{submitted.jobId}</code> (status: {submitted.status})
+        <p
+          role="status"
+          className="rounded-lg border border-green-300 bg-green-50 px-3 py-2 text-sm text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-300"
+        >
+          Job submitted:{' '}
+          <code className="rounded bg-green-100 px-1 py-0.5 font-mono text-xs dark:bg-green-900/50">
+            {submitted.jobId}
+          </code>{' '}
+          (status: {submitted.status})
         </p>
       )}
     </form>
