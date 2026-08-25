@@ -504,9 +504,6 @@ post-deploy health check does not exercise the WebSocket or job-dispatch paths a
 
 ### 8.4 Branding/domain decision deferred, deliberately
 
-The maintainer is planning to invite the TaxSEA team (possibly first-authorship) and the
-BugSigDB team as paper co-authors. Parking the service under `cancerdatasci.org` was
-considered and explicitly deferred — a jointly-authored tool sitting under one lab's branded
-domain reads oddly as the citable URL in a paper's software-availability section. The service
-stays on the default `*.workers.dev` URL until that authorship conversation settles; don't
-revisit this unilaterally.
+Parking the service under `cancerdatasci.org` was considered and explicitly deferred pending
+an ongoing discussion outside this repo. The service stays on the default `*.workers.dev` URL
+for now; don't revisit this unilaterally.
