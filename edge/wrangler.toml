@@ -46,7 +46,13 @@ name = "RATE_LIMITER"
 namespace_id = "1001"
 
   [ratelimits.simple]
-  limit = 10
+  # 3/min, not 10/min (issue #69). The old numbers let a single rate-limit-compliant IP
+  # occupy every container slot continuously: 10 submissions/min against max_instances = 10,
+  # with each slot held for boot + runtime + sleepAfter. Other users' jobs then failed hard
+  # ("The compute container could not be reached.") rather than queueing. At 3/min, with a
+  # slot held ~60s worst case (see docs/infra.md #3), one IP occupies ~3 of 10 instances and
+  # leaves clear headroom for everyone else.
+  limit = 3
   period = 60
 
 # One Worker serves the API and the SPA from the same origin -- see the design note

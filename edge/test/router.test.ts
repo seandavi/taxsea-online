@@ -146,7 +146,7 @@ describe("forwardToDO origin preservation", () => {
 
 describe("rate limiting", () => {
   it("returns 429 with Retry-After once the per-IP limit is exceeded", async () => {
-    // wrangler.toml's [[ratelimits.simple]]: limit = 10, period = 60.
+    // wrangler.toml's [[ratelimits.simple]]: limit = 3, period = 60 (issue #69).
     const ip = freshIp();
     let last: Response | undefined;
     for (let i = 0; i < 11; i++) {

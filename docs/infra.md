@@ -160,6 +160,42 @@ What was checked in this issue, using `cdsci-cloudflare-workers-token` (the toke
 4. Re-run `wrangler deploy`. If it still fails identically, the blocker is more likely the
    Workers Paid plan/Containers entitlement (see §4) than the token.
 
+## 3b. Concurrency budget: rate limit vs. container capacity
+
+These three numbers are coupled, and getting them wrong is an availability bug, not a tuning
+preference. They were originally set independently, and the combination let a single
+**rate-limit-compliant** IP starve everyone else (issue #69).
+
+| Setting | Where | Value |
+|---|---|---|
+| Per-IP submission rate | `edge/wrangler.toml`, `[ratelimits.simple]` | **3** per 60s |
+| Concurrent container ceiling | `edge/wrangler.toml`, `max_instances` | **10** |
+| Post-job idle hold | `edge/src/JobCoordinatorDO.ts`, `sleepAfter` | **5s** |
+
+**The rule:** a container slot is occupied for `boot + runtime + sleepAfter`. Measured against
+production, boot is ~8s and runtime is ~8s (enrichment) to ~40s (ORA, since BugSigDB's 350
+signatures landed), so a slot is held for **roughly 20-55s**, call it 60s worst case.
+
+A single IP sustaining the permitted rate therefore occupies about
+`rate_per_minute x (slot_seconds / 60)` instances continuously.
+
+- **Before:** 10/min with `sleepAfter = "1m"` → slot held ~105s → ~17 instances demanded
+  against a ceiling of 10. One IP saturated the pool indefinitely, and everyone else's jobs
+  failed hard with `"The compute container could not be reached."` rather than queueing.
+- **Now:** 3/min with `sleepAfter = "5s"` → slot held ~60s → ~3 instances, leaving 7 of 10 free.
+
+`sleepAfter` was the dominant term and the easiest win: each DO serves exactly one job, so
+there is nothing to keep warm afterward — the code comment already said so while the value said
+otherwise.
+
+**`max_instances` was deliberately left at 10.** Raising it is the other lever, but it is a
+spend decision on a public compute endpoint (PLAN.md §7), not a free fix — so it is a
+maintainer's call, not a default.
+
+**If you change any one of these, redo the arithmetic above.** In particular, anything that
+makes jobs slower (a new bundled database, a larger `maxSetSize` default) lengthens the slot
+hold and shrinks the effective per-IP ceiling.
+
 ## 4. Workers Paid plan (Cloudflare Containers requirement)
 
 Cloudflare Containers requires the Workers Paid plan
