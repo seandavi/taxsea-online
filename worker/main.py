@@ -92,9 +92,16 @@ def _check_taxsea() -> tuple[bool, str]:
             capture_output=True,
             text=True,
             timeout=RSCRIPT_TIMEOUT_SECONDS,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         return False, "Rscript timed out loading TaxSEA"
+    except OSError as exc:
+        # The Rscript binary itself isn't on PATH (e.g. a plain Python test/lint
+        # environment with no R installed, as opposed to the container image, which
+        # always has it) -- a missing interpreter is squarely "R/TaxSEA not loadable",
+        # not a reason to crash the whole app at import time.
+        return False, f"Rscript not found: {exc}"
     if proc.returncode != 0:
         return False, _sanitize_error(
             proc.stderr.strip() or "Rscript exited nonzero loading TaxSEA"
@@ -142,6 +149,7 @@ def run(payload: RunRequest, authorization: str | None = Header(default=None)) -
                 capture_output=True,
                 text=True,
                 timeout=RSCRIPT_TIMEOUT_SECONDS,
+                check=False,
             )
         except subprocess.TimeoutExpired:
             execution_time_ms = int((time.monotonic() - start) * 1000)
