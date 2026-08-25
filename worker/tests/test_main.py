@@ -4,7 +4,9 @@ needed -- see /worker/tests/test_worker_r.R for the real-R-process test instead)
 """
 
 import json
+import os
 import subprocess
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -15,6 +17,7 @@ client = TestClient(main.app)
 JOB_ID = "3fa85f64-5717-4562-b3fc-2c963f66afa6"
 AUTH = {"Authorization": f"Bearer {main.WORKER_SHARED_SECRET}"}
 BODY = {"jobId": JOB_ID, "mode": "ora", "taxa": ["Bifidobacterium_longum"]}
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _fake_run_writing(output_body: dict):
@@ -142,6 +145,67 @@ def test_error_strings_are_distinct(monkeypatch):
     errors.add(client.post("/run", json=BODY, headers=AUTH).json()["error"])
 
     assert len(errors) == 3
+
+
+def test_success_response_matches_expected_shape(monkeypatch):
+    """The DO writes the /run success body to R2 verbatim -- its shape is the contract,
+    so validate against the same fixture used to document that contract."""
+    expected = json.loads((FIXTURES / "expected_output_shape.json").read_text())
+    monkeypatch.setattr(main.subprocess, "run", _fake_run_writing(expected))
+
+    resp = client.post("/run", json=BODY, headers=AUTH)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body.keys()) == set(expected.keys())
+    assert set(body["taxsea"].keys()) == set(expected["taxsea"].keys())
+    assert body["results"].keys() == expected["results"].keys()
+    for name, collection in body["results"].items():
+        assert set(collection.keys()) == {"columns", "rows"}
+        assert isinstance(collection["columns"], list)
+        assert isinstance(collection["rows"], list)
+
+
+def test_tempdir_removed_after_success(monkeypatch):
+    captured = {}
+
+    def _fake(cmd, **kwargs):
+        captured["dir"] = os.path.dirname(cmd[2])
+        with open(cmd[3], "w") as f:
+            json.dump(
+                {
+                    "jobId": JOB_ID,
+                    "status": "completed",
+                    "executionTimeMs": 1,
+                    "taxsea": {"packageVersion": "1.4.0", "mode": "ora", "params": {}},
+                    "results": {},
+                },
+                f,
+            )
+        return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(main.subprocess, "run", _fake)
+
+    resp = client.post("/run", json=BODY, headers=AUTH)
+
+    assert resp.status_code == 200
+    assert not Path(captured["dir"]).exists()
+
+
+def test_tempdir_removed_after_failure(monkeypatch):
+    captured = {}
+
+    def _fake(cmd, **kwargs):
+        captured["dir"] = os.path.dirname(cmd[2])
+        return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="boom")
+
+    monkeypatch.setattr(main.subprocess, "run", _fake)
+
+    resp = client.post("/run", json=BODY, headers=AUTH)
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "failed"
+    assert not Path(captured["dir"]).exists()
 
 
 def test_health_healthy(monkeypatch):
