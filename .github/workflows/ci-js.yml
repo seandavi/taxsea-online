@@ -1,0 +1,120 @@
+name: CI (JS)
+
+# Lints/typechecks/tests/builds the two TypeScript components (edge Worker,
+# frontend SPA). Must be safe on fork PRs: no secrets referenced anywhere, so a
+# fork PR can run with no credentials and still pass. See .github/workflows/README.md.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-js-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Cheap job that decides whether the edge/frontend jobs below need to run at
+  # all for this PR. Hand-rolled with `git diff` instead of a third-party
+  # paths-filter action -- git is already on the runner and this is a few
+  # lines. Its output is ignored on push (edge/frontend always run there).
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      edge: ${{ steps.filter.outputs.edge }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Determine changed paths
+        id: filter
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}")
+          else
+            # push to main always runs both jobs (see `if:` on edge/frontend below);
+            # the exact diff doesn't matter here.
+            CHANGED="edge/ frontend/"
+          fi
+          echo "Changed paths:"
+          echo "$CHANGED"
+
+          if echo "$CHANGED" | grep -q '^edge/'; then
+            echo "edge=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "edge=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if echo "$CHANGED" | grep -q '^frontend/'; then
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "frontend=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  edge:
+    name: edge
+    needs: changes
+    if: needs.changes.outputs.edge == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: edge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: edge/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+
+      # edge/wrangler.toml serves the built SPA via [assets], so `wrangler
+      # deploy --dry-run` (the build script) needs frontend/dist to exist even
+      # though this job never builds the frontend -- an empty dir satisfies
+      # the directory-exists check without pulling the frontend job in.
+      - run: mkdir -p ../frontend/dist
+      - run: npm run build
+
+  frontend:
+    name: frontend
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
