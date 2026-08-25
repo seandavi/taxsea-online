@@ -209,7 +209,14 @@ export async function runJob(
     // containerFetch, not this.fetch -- this.fetch is overridden above and would recurse.
     response = await deps.containerFetch("http://localhost/run", {
       method: "POST",
-      headers: { Authorization: `Bearer ${deps.env.WORKER_SHARED_SECRET}` },
+      // Content-Type is required, not cosmetic: without it, FastAPI/Starlette can't parse
+      // the body as JSON for the RunRequest pydantic model and rejects every request with
+      // 400 -- found via the real deployed smoke test (issue #23), reproduced locally by
+      // POSTing the identical body with and without this header against the built image.
+      headers: {
+        Authorization: `Bearer ${deps.env.WORKER_SHARED_SECRET}`,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({ jobId, ...payload }),
     });
   } catch (err) {

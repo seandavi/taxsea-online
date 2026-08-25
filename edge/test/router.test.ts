@@ -116,6 +116,34 @@ describe("jobId path validation", () => {
   });
 });
 
+describe("forwardToDO origin preservation", () => {
+  it("forwards /state and /ws with the real request origin, not a placeholder", async () => {
+    // Regression test: forwardToDO used to rewrite the internal request to
+    // `http://do${path}`, so JobCoordinatorDO's own Origin-header check (which reads
+    // `new URL(request.url).origin`) could never match a real client's Origin header --
+    // every WebSocket connection 403'd in production despite passing every unit test,
+    // because tests call handleFetch/handleRequest with a real URL directly, never
+    // through this rewrite (found via the real deployed e2e smoke test, issue #23).
+    let seenUrl: string | undefined;
+    const fakeCoordinator = {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: async (input: RequestInfo | URL) => {
+          seenUrl = input instanceof Request ? input.url : input.toString();
+          return new Response(null, { status: 200 });
+        },
+      }),
+    } as unknown as Env["JOB_COORDINATOR"];
+
+    const jobId = crypto.randomUUID();
+    await handleRequest(getJob(jobId, "ws"), { ...env, JOB_COORDINATOR: fakeCoordinator });
+
+    expect(seenUrl).toBeDefined();
+    expect(new URL(seenUrl!).origin).toBe("https://example.com");
+    expect(new URL(seenUrl!).pathname).toBe("/ws");
+  });
+});
+
 describe("rate limiting", () => {
   it("returns 429 with Retry-After once the per-IP limit is exceeded", async () => {
     // wrangler.toml's [[ratelimits.simple]]: limit = 10, period = 60.

@@ -116,7 +116,13 @@ describe("JobCoordinatorDO logic", () => {
       "http://localhost/run",
       expect.objectContaining({
         method: "POST",
-        headers: expect.objectContaining({ Authorization: expect.stringContaining("Bearer ") }),
+        // Content-Type is required, not cosmetic -- without it FastAPI/Starlette can't
+        // parse the body as JSON and rejects every request with 400 (found via the real
+        // deployed smoke test, issue #23; this call previously omitted it entirely).
+        headers: expect.objectContaining({
+          Authorization: expect.stringContaining("Bearer "),
+          "Content-Type": "application/json",
+        }),
       }),
     );
     const [, init] = containerFetch.mock.calls[0] as [string, RequestInit];
