@@ -92,6 +92,7 @@ def _check_taxsea() -> tuple[bool, str]:
             capture_output=True,
             text=True,
             timeout=RSCRIPT_TIMEOUT_SECONDS,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         return False, "Rscript timed out loading TaxSEA"
@@ -142,6 +143,7 @@ def run(payload: RunRequest, authorization: str | None = Header(default=None)) -
                 capture_output=True,
                 text=True,
                 timeout=RSCRIPT_TIMEOUT_SECONDS,
+                check=False,
             )
         except subprocess.TimeoutExpired:
             execution_time_ms = int((time.monotonic() - start) * 1000)

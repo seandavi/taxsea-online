@@ -160,7 +160,7 @@ def test_success_response_matches_expected_shape(monkeypatch):
     assert set(body.keys()) == set(expected.keys())
     assert set(body["taxsea"].keys()) == set(expected["taxsea"].keys())
     assert body["results"].keys() == expected["results"].keys()
-    for name, collection in body["results"].items():
+    for collection in body["results"].values():
         assert set(collection.keys()) == {"columns", "rows"}
         assert isinstance(collection["columns"], list)
         assert isinstance(collection["rows"], list)
