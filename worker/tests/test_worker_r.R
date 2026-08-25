@@ -56,6 +56,16 @@ out <- fromJSON(tmp_out, simplifyVector = FALSE)
 check_envelope(out, "enrichment")
 stopifnot("jobId not preserved through the envelope" = identical(out$jobId, "test-job-enrichment"))
 
+# Regression check for issue #61: bugsigdbr must be installed and its BiocFileCache
+# pre-warmed at image build time, or the BugSigDB collection silently comes back empty
+# (a warning, not an error, from TaxSEA -- so nothing else here would catch it).
+stopifnot(
+  "BugSigDB collection missing from results" = "BugSigDB" %in% names(out$results),
+  "BugSigDB must be non-empty (bugsigdbr not installed, or its cache not pre-warmed?)" =
+    length(out$results$BugSigDB$rows) > 0
+)
+cat(sprintf("BugSigDB: %d rows\n", length(out$results$BugSigDB$rows)))
+
 pvals <- na.omit(collect_pvalues(out))
 stopifnot("expected at least one PValue in the enrichment results" = length(pvals) > 0)
 min_pval <- min(pvals)

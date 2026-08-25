@@ -14,6 +14,26 @@
 suppressPackageStartupMessages({
   library(jsonlite)
   library(TaxSEA)
+  library(BiocFileCache)
+})
+
+# TaxSEA's taxsea_prepare() calls bugsigdbr::importBugSigDB() to pull in BugSigDB
+# signatures (issue #61). bugsigdbr caches that data on disk via BiocFileCache, but
+# BiocFileCache's "web" resource type does a live HTTP HEAD revalidation against the
+# upstream host on *every* read -- not just the first -- to decide whether the cached
+# copy is stale. This container always runs with enableInternet = false (PLAN.md §2.6,
+# edge/src/JobCoordinatorDO.ts), so that revalidation always fails, and the fallback
+# path (a real re-download attempt) then hard-errors the whole TaxSEA() call, not just
+# BugSigDB -- verified directly: without this override, `docker run --network none`
+# throws "Error: download failed; see warnings()" instead of returning results.
+#
+# Since this container never has network access at request time by design, always
+# trust the copy pre-warmed into the image at build time (worker/Dockerfile) instead of
+# attempting to revalidate it. There is no legitimate runtime scenario where skipping
+# revalidation is wrong here.
+setMethod("bfcneedsupdate", "BiocFileCacheBase", function(x, rids, ...) {
+  if (missing(rids)) rids <- BiocFileCache:::.get_all_web_rids(x)
+  stats::setNames(rep(FALSE, length(rids)), rids)
 })
 
 main <- function(argv) {

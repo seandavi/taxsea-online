@@ -12,7 +12,7 @@ FROM bioconductor/bioconductor_docker:RELEASE_3_23
 # layer, and the build) on any package install failure by default.
 RUN Rscript -e " \
       BiocManager::install(version = '3.23', ask = FALSE, update = FALSE); \
-      BiocManager::install(c('TaxSEA', 'jsonlite'), ask = FALSE, update = FALSE)"
+      BiocManager::install(c('TaxSEA', 'jsonlite', 'bugsigdbr'), ask = FALSE, update = FALSE)"
 
 # Build-time smoke check: confirm the package and its bundled example data both load.
 #
@@ -49,6 +49,28 @@ COPY main.py worker.R ./
 RUN useradd --create-home --shell /usr/sbin/nologin appuser \
     && chown -R appuser:appuser /app
 USER appuser
+
+# --- Pre-warm the bugsigdbr/BiocFileCache cache -------------------------------
+# bugsigdbr does not bundle BugSigDB data: TaxSEA's taxsea_prepare() pulls it in lazily
+# via BiocFileCache into $HOME/.cache/R/bugsigdbr/BiocFileCache.sqlite the first time an
+# analysis needs it. The deployed container runs with enableInternet = false (PLAN.md
+# §2.6, edge/src/JobCoordinatorDO.ts), so that lazy first-request download would fail or
+# hang in production with no network. Run a real enrichment call here, as appuser (after
+# USER appuser above, since the cache path is $HOME-relative and must land where the
+# runtime process's $HOME actually resolves to), so the download happens at build time
+# -- while the build has network access -- and gets baked into this image layer. Assert
+# BugSigDB rows are non-empty so a broken cache/network fails the build, not a later job.
+RUN Rscript -e " \
+      library(TaxSEA); \
+      data('TaxSEA_test_data'); \
+      res <- TaxSEA( \
+        taxon_ranks = TaxSEA_test_data, \
+        mode = 'enrichment', \
+        min_set_size = 5, \
+        max_set_size = 100, \
+        lookup_missing = FALSE, \
+        custom_db = NULL); \
+      stopifnot('BugSigDB cache pre-warm produced no rows' = nrow(res\$BugSigDB) > 0)"
 
 EXPOSE 8080
 
