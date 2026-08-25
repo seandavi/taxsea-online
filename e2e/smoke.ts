@@ -403,6 +403,42 @@ async function scenarioG(ctx: Ctx): Promise<{ outcome: ScenarioOutcome; detail: 
   return { outcome: "pass", detail: text.trim() };
 }
 
+
+// ---------------------------------------------------------------------------
+// Scenario I: security headers on the HTML entry point.
+//
+// Only checkable against a real deployment. edge/test/router.test.ts asserts that the
+// Worker *adds* these headers, which is true -- but Cloudflare serves static assets
+// before invoking the Worker, so "/" (matching index.html) was served straight from the
+// asset layer and never reached withSecurityHeaders() at all (issue #95). A unit test
+// can't see that; only a live request can. Checks "/" specifically, not a SPA fallback
+// route like /about, because the fallback path always did reach the Worker.
+// ---------------------------------------------------------------------------
+
+async function scenarioI(ctx: Ctx): Promise<{ outcome: ScenarioOutcome; detail: string }> {
+  // Cache-bust: a cached edge copy can predate a routing change.
+  const res = await fetch(`${ctx.baseUrl}/?smoke=${Date.now()}`);
+  assert(res.status === 200, `GET / returned ${res.status}, expected 200`);
+
+  const csp = res.headers.get("Content-Security-Policy");
+  assert(
+    csp !== null,
+    'GET / has no Content-Security-Policy -- the Worker is being bypassed for asset-matched ' +
+      'paths; check run_worker_first in edge/wrangler.toml (issue #95)',
+  );
+  assert(
+    res.headers.get("X-Content-Type-Options") === "nosniff",
+    `X-Content-Type-Options was "${res.headers.get("X-Content-Type-Options")}", expected "nosniff"`,
+  );
+  assert(
+    res.headers.get("Referrer-Policy") === "no-referrer",
+    `Referrer-Policy was "${res.headers.get("Referrer-Policy")}", expected "no-referrer"`,
+  );
+  assert(!/script-src[^;]*unsafe-inline/.test(csp ?? ""), `CSP grants unsafe-inline: ${csp}`);
+
+  return { outcome: "pass", detail: `CSP, nosniff and Referrer-Policy all present on /` };
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -460,6 +496,10 @@ async function main(): Promise<void> {
   const g = await runScenario("G (health)", () => scenarioG(ctx));
   results.push(g);
   printResult(g);
+
+  const i = await runScenario("I (security headers on /)", () => scenarioI(ctx));
+  results.push(i);
+  printResult(i);
 
   const h = await runScenario("H (cold start budget)", async () => {
     if (ctx.coldStartMsA === null) {

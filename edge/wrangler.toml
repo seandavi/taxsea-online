@@ -55,6 +55,14 @@ namespace_id = "1001"
 directory = "../frontend/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+# Cloudflare serves assets *before* invoking the Worker by default, so "/" (which matches
+# index.html) was being served straight from the asset layer and never reached
+# withSecurityHeaders() -- CSP, nosniff and Referrer-Policy were live on /about but missing
+# on the one URL every visitor loads (issue #95). Routing the HTML entry points through the
+# Worker fixes it; handleRequest already ends in withSecurityHeaders(env.ASSETS.fetch(...)).
+# Hashed JS/CSS stay asset-first on purpose: withSecurityHeaders skips non-HTML anyway, so
+# routing them here would just buy an extra Worker invocation per asset.
+run_worker_first = [ "/", "/index.html" ]
 
 [vars]
 JOB_TIMEOUT_MS = 300000
