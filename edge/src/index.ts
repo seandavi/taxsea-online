@@ -113,10 +113,20 @@ async function handleCreateJob(request: Request, env: Env): Promise<Response> {
 }
 
 /** Forwards a read (`/state` or `/ws`) to the DO instance addressed by `jobId`. Not rate
- * limited -- only POST /api/jobs is (docs/api.md #6). */
+ * limited -- only POST /api/jobs is (docs/api.md #6).
+ *
+ * The internal request keeps the real origin/protocol/host and only swaps the pathname
+ * (public `/api/jobs/:jobId/ws` -> internal `/ws`) -- a placeholder origin like
+ * `http://do` would make `JobCoordinatorDO`'s own `Origin`-header check
+ * (`new URL(request.url).origin`) compare against a value that can never match a real
+ * client's `Origin` header, silently 403-ing every WebSocket connection in production
+ * (found via the real deployed smoke test, issue #23 -- unit tests never caught this
+ * because they call `handleFetch`/`handleRequest` directly with a real request URL,
+ * never through this rewrite). */
 function forwardToDO(env: Env, jobId: string, path: string, request: Request): Promise<Response> {
   const stub = env.JOB_COORDINATOR.get(env.JOB_COORDINATOR.idFromName(jobId));
-  return stub.fetch(new Request(`http://do${path}`, request));
+  const internalUrl = new URL(path, request.url);
+  return stub.fetch(new Request(internalUrl, request));
 }
 
 async function handleResult(env: Env, jobId: string): Promise<Response> {
