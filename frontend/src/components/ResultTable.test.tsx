@@ -74,4 +74,41 @@ describe('ResultTable', () => {
     expect(screen.getByText('GABA producers')).toBeTruthy();
     expect(screen.queryByText('Crohns disease')).toBeNull();
   });
+
+  it('keeps null values sorted last regardless of direction', () => {
+    const collection: TaxSEAResultCollection = {
+      columns: ['taxonSetName', 'FDR'],
+      rows: [
+        { taxonSetName: 'Missing', FDR: null },
+        { taxonSetName: 'High', FDR: 0.5 },
+        { taxonSetName: 'Low', FDR: 0.01 },
+      ],
+    };
+    render(<ResultTable jobId="job-1" collectionName="C" collection={collection} />);
+    let dataRows = screen.getAllByRole('row').slice(1);
+    expect(dataRows.map((r) => within(r).getAllByRole('cell')[0]!.textContent)).toEqual(['Low', 'High', 'Missing']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'FDR' })); // toggle to descending
+    dataRows = screen.getAllByRole('row').slice(1);
+    expect(dataRows.map((r) => within(r).getAllByRole('cell')[0]!.textContent)).toEqual(['High', 'Low', 'Missing']);
+  });
+
+  it('sorting a different column resets to ascending and moves aria-sort off the old column', () => {
+    const collection: TaxSEAResultCollection = {
+      columns: ['taxonSetName', 'FDR'],
+      rows: [
+        { taxonSetName: 'B', FDR: 0.01 },
+        { taxonSetName: 'A', FDR: 0.5 },
+      ],
+    };
+    render(<ResultTable jobId="job-1" collectionName="C" collection={collection} />);
+    fireEvent.click(screen.getByRole('button', { name: 'FDR' })); // FDR asc -> desc
+    expect(screen.getByRole('columnheader', { name: 'FDR' }).getAttribute('aria-sort')).toBe('descending');
+
+    fireEvent.click(screen.getByRole('button', { name: 'taxonSetName' }));
+    expect(screen.getByRole('columnheader', { name: 'FDR' }).getAttribute('aria-sort')).toBe('none');
+    expect(screen.getByRole('columnheader', { name: 'taxonSetName' }).getAttribute('aria-sort')).toBe('ascending');
+    const dataRows = screen.getAllByRole('row').slice(1);
+    expect(within(dataRows[0]!).getByText('A')).toBeTruthy();
+  });
 });
