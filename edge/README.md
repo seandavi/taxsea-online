@@ -19,6 +19,10 @@ up, so it requires a working local Docker daemon (`docker ps` should succeed). `
 supplies `WORKER_SHARED_SECRET` for local dev the same way `wrangler secret put` does for a
 deployed environment — never commit `.dev.vars` itself.
 
+See [`../docs/development.md`](../docs/development.md) for the full three-component setup,
+the "run the whole stack" sequence, and troubleshooting (container image build looking like
+a hang, jobs stuck in `running`, 401s, etc).
+
 ## Other scripts
 
 ```sh
