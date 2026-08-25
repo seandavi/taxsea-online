@@ -142,3 +142,40 @@ def test_error_strings_are_distinct(monkeypatch):
     errors.add(client.post("/run", json=BODY, headers=AUTH).json()["error"])
 
     assert len(errors) == 3
+
+
+def test_health_healthy(monkeypatch):
+    monkeypatch.setattr(
+        main.subprocess,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(
+            cmd, returncode=0, stdout="1.4.0\n", stderr=""
+        ),
+    )
+    monkeypatch.setattr(main, "_TAXSEA_STATUS", main._check_taxsea())
+
+    resp = client.get("/health")
+
+    assert resp.status_code == 200
+    assert "Healthy" in resp.text
+    assert "1.4.0" in resp.text
+
+
+def test_health_unhealthy(monkeypatch):
+    monkeypatch.setattr(
+        main.subprocess,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(
+            cmd,
+            returncode=1,
+            stdout="",
+            stderr="Error in library(TaxSEA) : there is no package called 'TaxSEA'",
+        ),
+    )
+    monkeypatch.setattr(main, "_TAXSEA_STATUS", main._check_taxsea())
+
+    resp = client.get("/health")
+
+    assert resp.status_code == 503
+    assert "TaxSEA" in resp.text
+    assert "Healthy" not in resp.text

@@ -25,7 +25,7 @@ from typing import Literal
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, model_validator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -76,6 +76,34 @@ async def _malformed_body(request: Request, exc: RequestValidationError) -> JSON
 def _sanitize_error(text: str) -> str:
     """Truncate to 2000 chars and strip absolute paths; R errors can echo input content."""
     return _ABS_PATH_RE.sub("<path>", text)[:MAX_ERROR_LEN]
+
+
+def _check_taxsea() -> tuple[bool, str]:
+    """Verify R + TaxSEA are loadable and get the package version. Called once at import
+    (below) and cached in _TAXSEA_STATUS -- GET /health must never spawn its own Rscript
+    process, or the health check becomes the most expensive endpoint in the service."""
+    try:
+        proc = subprocess.run(
+            [
+                "Rscript",
+                "-e",
+                'library(TaxSEA); cat(as.character(utils::packageVersion("TaxSEA")))',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=RSCRIPT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "Rscript timed out loading TaxSEA"
+    if proc.returncode != 0:
+        return False, _sanitize_error(
+            proc.stderr.strip() or "Rscript exited nonzero loading TaxSEA"
+        )
+    return True, proc.stdout.strip()
+
+
+# Startup check, not a per-request probe -- see _check_taxsea's docstring.
+_TAXSEA_STATUS = _check_taxsea()
 
 
 def _check_auth(authorization: str | None) -> None:
@@ -148,3 +176,13 @@ def run(payload: RunRequest, authorization: str | None = Header(default=None)) -
 
     logger.info("jobId=%s completed in %sms", job_id, execution_time_ms)
     return output
+
+
+@app.get("/health")
+def health() -> PlainTextResponse:
+    # No auth: pingEndpoint on the Container class must reach this before the container
+    # is considered ready, and it's not internet-reachable regardless (see issue #6).
+    ok, info = _TAXSEA_STATUS
+    if ok:
+        return PlainTextResponse(f"Healthy: TaxSEA {info}")
+    return PlainTextResponse(f"Unhealthy: TaxSEA not loadable: {info}", status_code=503)
