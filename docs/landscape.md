@@ -82,8 +82,22 @@ Honest reading of the overlap:
   and plots should probably outrank the current M11 items, since that is exactly where the
   official portal is ahead.
 
-## 6. Open question for the maintainer
+## 6. Outcome
 
-See issue #100. The collaboration context (the TaxSEA team's possible involvement) sits outside
-this repo, and materially changes the answer — this document deliberately records only what is
-publicly verifiable.
+**Decided 2026-08-25 by the maintainer: the project does not move forward without significant
+new functionality, algorithms, or data sources.** M11 and M13 are on hold; M10 (security) and
+M12 (attribution) stand, being obligations of operating a public service. Recorded durably in
+`PLAN.md` §8.5, tracked in issue #100.
+
+A follow-up check strengthened the case rather than weakening it: shiny.taxsea.app is not just
+returning 200, it is a **live Shiny Server with a working session** (`Shiny.shinyapp
+.isConnected()` true, no disconnect overlay) behind Caddy, with a TLS certificate issued
+2026-08-13. The dormancy visible in its commit history describes its development, not its
+availability — the service works today for anyone following the link in the paper.
+
+Not verified: a full end-to-end analysis through that app. The session layer is confirmed; the
+computation returning results was not exercised.
+
+The collaboration context (the TaxSEA team's possible involvement) sits outside this repo and
+bears on any differentiator worth pursuing — this document records only what is publicly
+verifiable.
