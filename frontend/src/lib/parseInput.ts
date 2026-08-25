@@ -29,6 +29,9 @@ interface EnrichmentResult {
   errors: ParseError[];
   /** Whole-input error not tied to one line (e.g. taxa count out of range). */
   rangeError: string | null;
+  /** Non-null when the input has more than 2 delimited columns: labels for the
+   * rank-column picker. Nothing is parsed until the caller passes a `rankColumn`. */
+  columns: string[] | null;
 }
 
 interface OraResult {
@@ -89,30 +92,63 @@ function toFiniteNumber(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** Splits one enrichment-mode line into [nameField, rankField], or null if no
- * delimiter (tab/comma/whitespace) separates two columns at all. */
-function splitEnrichmentLine(line: string): string[] | null {
-  let fields: string[];
-  if (line.includes('\t')) {
-    fields = splitDelimited(line, '\t');
-  } else if (line.includes(',')) {
-    fields = splitDelimited(line, ',');
-  } else {
-    // Whitespace-delimited: the name itself may contain a space (e.g.
-    // "Bifidobacterium longum 2.45"), so treat the last token as the rank and
-    // everything before it as the name. ponytail: no quote support on this
-    // branch — add if a real paste needs it.
+function delimiterOf(line: string): string | null {
+  if (line.includes('\t')) return '\t';
+  if (line.includes(',')) return ',';
+  return null;
+}
+
+/** How many tokens at the end of the line parse as finite numbers. */
+function trailingNumericCount(tokens: string[]): number {
+  let n = 0;
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    if (toFiniteNumber(tokens[i] ?? '') === null) break;
+    n++;
+  }
+  return n;
+}
+
+/** True for whitespace-separated input carrying more than one numeric column, e.g. a
+ * DESeq2 table copied out of the R console. A name may itself contain spaces
+ * ("Bifidobacterium longum 2.45"), so token count alone can't tell the two apart —
+ * but two or more *numeric* trailing tokens can only be multiple numeric columns. */
+function isAmbiguousWhitespaceRow(line: string): boolean {
+  return delimiterOf(line) === null && trailingNumericCount(line.trim().split(/\s+/)) > 1;
+}
+
+/** Labels for the rank-column picker. Always numbered, with the header name appended
+ * when the first row looks like a header — a wrong-but-plausible name is worse than a
+ * bare number, and R writes tables whose header is one field short of its data rows. */
+function columnLabels(headerFields: string[]): string[] {
+  const looksLikeHeader = toFiniteNumber(headerFields[headerFields.length - 1] ?? '') === null;
+  return headerFields.map((f, i) =>
+    looksLikeHeader && f.trim() !== '' ? `Column ${i + 1} — ${f.trim()}` : `Column ${i + 1}`,
+  );
+}
+
+/** Splits one enrichment-mode line into [nameField, rankField], or null if the line
+ * doesn't yield an unambiguous pair. `rankColumn` (0-based) picks the rank field on
+ * input with more than 2 delimited columns; without it such a line is refused rather
+ * than guessed at (issue #63 — silently taking the last column ranked real DESeq2
+ * output by `padj` instead of `log2FoldChange`, with no error and no warning). */
+function splitEnrichmentLine(line: string, rankColumn?: number): string[] | null {
+  const delim = delimiterOf(line);
+  if (delim === null) {
+    // Whitespace-delimited: the name itself may contain a space, so treat the last
+    // token as the rank and everything before it as the name. ponytail: no quote
+    // support on this branch — add if a real paste needs it.
     const tokens = line.trim().split(/\s+/);
     if (tokens.length < 2) return null;
+    if (trailingNumericCount(tokens) > 1) return null; // ambiguous — see caller's message
     const rank = tokens[tokens.length - 1] ?? '';
     const name = tokens.slice(0, -1).join(' ');
     return [name, rank];
   }
+  const fields = splitDelimited(line, delim);
   if (fields.length < 2) return null;
   if (fields.length > 2) {
-    const rank = fields[fields.length - 1] ?? '';
-    const name = fields.slice(0, -1).join(' ');
-    return [name, rank];
+    if (rankColumn === undefined) return null;
+    return [fields[0] ?? '', fields[rankColumn] ?? ''];
   }
   return fields;
 }
@@ -125,7 +161,7 @@ function isBlank(line: string): boolean {
   return line.trim() === '';
 }
 
-export function parseInput(raw: string, mode: Mode): ParseResult {
+export function parseInput(raw: string, mode: Mode, rankColumn?: number): ParseResult {
   const lines = splitLines(raw);
   const errors: ParseError[] = [];
   const seen = new Map<string, number>();
@@ -134,20 +170,46 @@ export function parseInput(raw: string, mode: Mode): ParseResult {
   const firstDataIdx = lines.findIndex((l) => !isBlank(l));
 
   if (mode === 'enrichment') {
+    // Column detection is a property of the whole input, so it reads the first non-blank
+    // line only -- a ragged later row shouldn't silently change which column is the rank.
+    const firstLine = firstDataIdx >= 0 ? (lines[firstDataIdx] ?? '') : '';
+    const firstDelim = delimiterOf(firstLine);
+    const firstFields = firstDelim === null ? [] : splitDelimited(firstLine, firstDelim);
+    const columns = firstFields.length > 2 ? columnLabels(firstFields) : null;
+
+    // More than 2 columns and no explicit choice: parse nothing and ask. Deliberately not
+    // defaulting to a column -- a default is exactly the silent-wrong-answer bug (#63).
+    if (columns !== null && rankColumn === undefined) {
+      return {
+        mode,
+        ranks: {},
+        count: 0,
+        errors: [],
+        columns,
+        rangeError: `Input has ${columns.length} columns — choose which one holds the rank value.`,
+      };
+    }
+
     const ranks: Record<string, number> = {};
     lines.forEach((line, idx) => {
       if (isBlank(line)) return;
       if (idx === firstDataIdx) {
-        const fields = splitEnrichmentLine(line);
+        const fields = splitEnrichmentLine(line, rankColumn);
         const rankField = fields?.[1];
         if (!fields || rankField === undefined || toFiniteNumber(rankField) === null) {
           return; // treated as a header row, silently skipped
         }
       }
       const lineNo = idx + 1;
-      const fields = splitEnrichmentLine(line);
+      const fields = splitEnrichmentLine(line, rankColumn);
       if (!fields) {
-        errors.push({ line: lineNo, text: line.trim(), message: 'expected two columns (taxon name and rank)' });
+        errors.push({
+          line: lineNo,
+          text: line.trim(),
+          message: isAmbiguousWhitespaceRow(line)
+            ? 'more than one numeric column, separated by spaces — re-paste as tab- or comma-separated so the rank column can be chosen'
+            : 'expected two columns (taxon name and rank)',
+        });
         return;
       }
       const nameField = fields[0] ?? '';
@@ -175,7 +237,7 @@ export function parseInput(raw: string, mode: Mode): ParseResult {
       ranks[name] = rank;
     });
     const count = Object.keys(ranks).length;
-    return { mode, ranks, count, errors, rangeError: errors.length === 0 ? rangeError(count) : null };
+    return { mode, ranks, count, errors, columns, rangeError: errors.length === 0 ? rangeError(count) : null };
   }
 
   // ORA mode: one taxon name per line.
