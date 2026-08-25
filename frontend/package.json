@@ -7,7 +7,7 @@
     "dev": "vite",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "echo 'test: no-op (no test runner needed for app-shell issue #13)' && exit 0",
+    "test": "vitest run",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },
@@ -26,6 +26,7 @@
     "globals": "^17.11.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.68.0",
-    "vite": "^8.2.2"
+    "vite": "^8.2.2",
+    "vitest": "^3.2.4"
   }
 }

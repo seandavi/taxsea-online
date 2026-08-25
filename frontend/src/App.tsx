@@ -1,4 +1,6 @@
-// App shell only (issue #13). Job submission, progress, and results are #14-#16.
+// App shell (issue #13) + job submission form (issue #14). Progress and results are #15-#16.
+import SubmitForm from './components/SubmitForm';
+
 export default function App() {
   return (
     <>
@@ -11,7 +13,7 @@ export default function App() {
         </p>
       </header>
       <main>
-        <p>Taxon set enrichment analysis, coming soon.</p>
+        <SubmitForm />
       </main>
       <footer>
         <p>
