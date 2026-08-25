@@ -58,11 +58,18 @@ not_found_handling = "single-page-application"
 # Cloudflare serves assets *before* invoking the Worker by default, so "/" (which matches
 # index.html) was being served straight from the asset layer and never reached
 # withSecurityHeaders() -- CSP, nosniff and Referrer-Policy were live on /about but missing
-# on the one URL every visitor loads (issue #95). Routing the HTML entry points through the
-# Worker fixes it; handleRequest already ends in withSecurityHeaders(env.ASSETS.fetch(...)).
-# Hashed JS/CSS stay asset-first on purpose: withSecurityHeaders skips non-HTML anyway, so
-# routing them here would just buy an extra Worker invocation per asset.
-run_worker_first = [ "/", "/index.html" ]
+# on the one URL every visitor loads (issue #95).
+#
+# This MUST stay `true`, not a route array. An array makes every path outside the array
+# asset-first, and with not_found_handling = "single-page-application" that means /api/*
+# gets the SPA's index.html instead of reaching the Worker at all -- i.e. the whole API
+# returns HTML with a 200. That was shipped briefly and caught by the deploy's own
+# post-deploy health check; don't reintroduce it by "optimizing" this to a narrower list.
+# `true` is also simply what handleRequest was written for: it routes /api/*, then falls
+# back to withSecurityHeaders(await env.ASSETS.fetch(request)) for everything else. The
+# cost is one Worker invocation per static asset, which withSecurityHeaders passes straight
+# through untouched for non-HTML.
+run_worker_first = true
 
 [vars]
 JOB_TIMEOUT_MS = 300000
