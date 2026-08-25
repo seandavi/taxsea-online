@@ -46,8 +46,16 @@ export interface JobCoordinatorDeps {
   containerFetch: (url: string, init: RequestInit) => Promise<Response>;
   schedule: (delaySeconds: number, callback: ScheduleName) => Promise<unknown>;
   deleteSchedules: (callback: ScheduleName) => void;
-  broadcast: (state: JobState) => void;
+  /** Cloudflare's Hibernation API: registers `server` with the runtime so it survives this
+   * DO instance being evicted from memory (maps to `this.ctx.acceptWebSocket`). */
+  acceptWebSocket: (server: WebSocket) => void;
+  /** The live sockets, owned by the runtime rather than this DO instance -- still returns
+   * sockets accepted before an eviction/revival cycle (maps to `this.ctx.getWebSockets()`). */
+  getWebSockets: () => WebSocket[];
 }
+
+const isTerminal = (status: JobState["status"]) =>
+  status === "completed" || status === "failed" || status === "timed_out";
 
 /** Routes `/dispatch`, `/state` and `/ws`. Only `/dispatch` ever calls containerFetch -- a
  * status poll or WS upgrade must never boot a multi-GB container. */
@@ -64,12 +72,84 @@ export async function handleFetch(deps: JobCoordinatorDeps, request: Request): P
         ? handleState(deps)
         : new Response("Method Not Allowed", { status: 405 });
     case "/ws":
-      // ponytail: the hibernation WebSocket channel is issue #10. All that matters here is
-      // that this route exists and never touches containerFetch.
-      return new Response("WebSocket channel not yet implemented", { status: 501 });
+      return handleWebSocketUpgrade(deps, request);
     default:
       return new Response("Not Found", { status: 404 });
   }
+}
+
+/** Upgrades to the Hibernation-API WebSocket channel (docs/api.md `GET /ws`). Never calls
+ * containerFetch -- opening a progress socket must not boot a container. */
+async function handleWebSocketUpgrade(deps: JobCoordinatorDeps, request: Request): Promise<Response> {
+  if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+    return new Response("Expected Upgrade: websocket", { status: 426 });
+  }
+
+  // WebSocket upgrades are not subject to CORS, so this Origin check is the only thing
+  // stopping any website from opening a socket against a known jobId (docs/api.md #6).
+  const workerOrigin = new URL(request.url).origin;
+  if (request.headers.get("Origin") !== workerOrigin) {
+    return jsonError(403, "forbidden", "Origin not allowed");
+  }
+
+  const state = await deps.storage.get<JobState>(STATE_KEY);
+  if (!state) {
+    return jsonError(404, "not_found", "No job found for this id");
+  }
+
+  const pair = new WebSocketPair();
+  const client = pair[0];
+  const server = pair[1];
+  // acceptWebSocket, not server.accept() -- the Hibernation API variant, so this socket is
+  // owned by the runtime and survives this DO instance being evicted (PLAN.md #1.3).
+  deps.acceptWebSocket(server);
+
+  // Sent immediately so a client connecting after the job already finished sees the
+  // terminal state right away instead of hanging for a broadcast that already happened.
+  server.send(JSON.stringify(state));
+  if (isTerminal(state.status)) {
+    server.close(1000);
+  }
+
+  return new Response(null, { status: 101, webSocket: client });
+}
+
+/** Pushes `state` to every connected socket. `getWebSockets()` is runtime-owned (Hibernation
+ * API), so this reaches clients connected before an eviction/revival cycle just as well as
+ * ones connected after -- fixing the old in-memory `Set<WebSocket>` bug (PLAN.md #1.3). */
+function broadcast(deps: JobCoordinatorDeps, state: JobState): void {
+  const payload = JSON.stringify(state);
+  for (const ws of deps.getWebSockets()) {
+    try {
+      ws.send(payload);
+      if (isTerminal(state.status)) {
+        ws.close(1000);
+      }
+    } catch (err) {
+      console.error(`[${state.jobId}] failed to broadcast job state to a WebSocket, closing it:`, err);
+      try {
+        ws.close();
+      } catch {
+        // Already closed/closing -- nothing left to do.
+      }
+    }
+  }
+}
+
+/** Hibernation handlers. The channel is server-push only (docs/api.md `GET /ws`) -- there is
+ * no client command protocol. The only inbound message handled is a bare "ping" keepalive. */
+export function handleWebSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+  if (message === "ping") {
+    ws.send("pong");
+  }
+}
+
+export function handleWebSocketClose(ws: WebSocket, code: number, reason: string): void {
+  ws.close(code, reason);
+}
+
+export function handleWebSocketError(_ws: WebSocket, error: unknown): void {
+  console.error("JobCoordinatorDO WebSocket error:", error);
 }
 
 async function handleDispatch(deps: JobCoordinatorDeps, request: Request): Promise<Response> {
@@ -186,7 +266,7 @@ async function finalizeState(
   await deps.storage.put(STATE_KEY, finalState);
   deps.deleteSchedules("onJobTimeout");
   await deps.schedule(CLEANUP_DELAY_SECONDS, "onCleanup");
-  deps.broadcast(finalState);
+  broadcast(deps, finalState);
 }
 
 async function handleState(deps: JobCoordinatorDeps): Promise<Response> {
@@ -225,7 +305,7 @@ export async function onJobTimeout(deps: JobCoordinatorDeps): Promise<void> {
   // just resubmits. Recovery-by-scanning-R2 is a deliberate v1 ceiling, not an oversight
   // (PLAN.md #2.6); add it if lost in-flight jobs become a real support burden.
   await deps.schedule(CLEANUP_DELAY_SECONDS, "onCleanup");
-  deps.broadcast(finalState);
+  broadcast(deps, finalState);
 }
 
 /** Scheduled 24h after a job reaches a terminal state, so a finished job's DO storage
@@ -271,16 +351,8 @@ export class JobCoordinatorDO extends Container<Env> {
       containerFetch: (url, init) => this.containerFetch(url, init),
       schedule: (delaySeconds, callback) => this.schedule(delaySeconds, callback),
       deleteSchedules: (callback) => this.deleteSchedules(callback),
-      broadcast: (state) => {
-        const payload = JSON.stringify(state);
-        for (const ws of this.ctx.getWebSockets()) {
-          try {
-            ws.send(payload);
-          } catch (err) {
-            console.error(`[${state.jobId}] failed to broadcast job state to a WebSocket:`, err);
-          }
-        }
-      },
+      acceptWebSocket: (server) => this.ctx.acceptWebSocket(server),
+      getWebSockets: () => this.ctx.getWebSockets(),
     };
   }
 
@@ -294,5 +366,19 @@ export class JobCoordinatorDO extends Container<Env> {
 
   async onCleanup(): Promise<void> {
     await onCleanup(this.deps());
+  }
+
+  // Hibernation API handlers -- see `handleWebSocketMessage` et al above. Server-push only,
+  // so the only inbound message handled is a "ping" keepalive (docs/api.md `GET /ws`).
+  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+    handleWebSocketMessage(ws, message);
+  }
+
+  webSocketClose(ws: WebSocket, code: number, reason: string, _wasClean: boolean): void {
+    handleWebSocketClose(ws, code, reason);
+  }
+
+  webSocketError(ws: WebSocket, error: unknown): void {
+    handleWebSocketError(ws, error);
   }
 }
