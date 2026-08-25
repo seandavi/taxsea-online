@@ -154,6 +154,26 @@ startup "could plausibly reach tens of seconds before analysis even begins." Don
 a job sitting in `running` for the first 10-30+ seconds for a hang — that's expected cold
 boot time, which is also why the job timeout is set to 300 s rather than something tight.
 
+## Tracing a job with `wrangler tail`
+
+Every log line on both sides is single-line JSON with a `jobId` field (issue #22): the edge
+Worker/DO logs go through `log()` in `edge/src/log.ts`, and the container's go through
+`_log()` in `worker/main.py` — both end up in the same `wrangler tail` stream once
+`observability.enabled = true` (set in `edge/wrangler.toml`) ships to production.
+
+To pull a single job's full trace — lifecycle transitions in the DO, container
+start/stop/error events, and the container's own `job received` / `Rscript started` /
+`Rscript exited` / `result returned` lines — filter on its `jobId`:
+
+```sh
+wrangler tail --format=pretty | grep '"jobId":"<jobId>"'
+# or, to parse each JSON log line out of wrangler's own event wrapper:
+wrangler tail --format=json | jq -r '.logs[].message[]' | jq -c 'select(.jobId == "<jobId>")'
+```
+
+Locally, `wrangler dev`'s terminal output already carries the same JSON lines — the same
+`grep`/`jq` filter works against that output directly, no `wrangler tail` needed.
+
 ## `lookup_missing` is disabled
 
 The container always calls TaxSEA with `lookup_missing = FALSE` (`docs/api.md` §7) — it

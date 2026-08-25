@@ -4,6 +4,7 @@ needed -- see /worker/tests/test_worker_r.R for the real-R-process test instead)
 """
 
 import json
+import logging
 import os
 import subprocess
 from pathlib import Path
@@ -206,6 +207,36 @@ def test_tempdir_removed_after_failure(monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["status"] == "failed"
     assert not Path(captured["dir"]).exists()
+
+
+def test_shared_secret_never_logged(monkeypatch, caplog):
+    """Regression guard for issue #22: exercises a success, a job-level Rscript failure
+    (which deliberately logs sanitized stderr), and a wrong-secret 401 -- none of them may
+    put WORKER_SHARED_SECRET's value anywhere in the captured log output."""
+    caplog.set_level(logging.INFO, logger="taxsea-worker")
+
+    envelope = {
+        "jobId": JOB_ID,
+        "status": "completed",
+        "executionTimeMs": 1,
+        "taxsea": {"packageVersion": "1.4.0", "mode": "ora", "params": {}},
+        "results": {},
+    }
+    monkeypatch.setattr(main.subprocess, "run", _fake_run_writing(envelope))
+    client.post("/run", json=BODY, headers=AUTH)
+
+    monkeypatch.setattr(
+        main.subprocess,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(
+            cmd, returncode=1, stdout="", stderr=f"boom near secret {main.WORKER_SHARED_SECRET}"
+        ),
+    )
+    client.post("/run", json=BODY, headers=AUTH)
+    client.post("/run", json=BODY, headers={"Authorization": "Bearer wrong"})
+
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert main.WORKER_SHARED_SECRET not in logged
 
 
 def test_health_healthy(monkeypatch):

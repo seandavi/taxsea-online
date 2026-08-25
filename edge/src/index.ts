@@ -5,6 +5,7 @@
 export { JobCoordinatorDO } from "./JobCoordinatorDO";
 
 import { handleHealth } from "./health";
+import { log } from "./log";
 import { validateJobPayload } from "./schema";
 
 // docs/api.md #4.
@@ -35,6 +36,7 @@ async function checkRateLimit(request: Request, env: Env): Promise<Response | nu
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
   const { success } = await env.RATE_LIMITER.limit({ key: ip });
   if (success) return null;
+  log("index", "warn", "job rejected: rate limited", {});
   return jsonError(429, "rate_limited", "Too many job submissions. Try again shortly.");
   // Retry-After is set by the caller, which has access to the Response to patch a header onto.
 }
@@ -60,6 +62,8 @@ async function handleCreateJob(request: Request, env: Env): Promise<Response> {
 
   const validated = validateJobPayload(body, env.MAX_TAXA);
   if ("error" in validated) {
+    // field is a schema key name (e.g. "taxa"), never submitted content.
+    log("index", "warn", "job rejected: invalid payload", { error: validated.error, field: validated.field });
     return Response.json(validated, { status: 400 });
   }
 
@@ -75,15 +79,26 @@ async function handleCreateJob(request: Request, env: Env): Promise<Response> {
     ...(validated.mode === "enrichment" ? { ranks: validated.ranks } : { taxa: validated.taxa }),
   };
 
+  // Counts/sizes only -- never the taxa/ranks themselves (docs/api.md #6, issue #22).
+  log("index", "info", "job dispatch requested", {
+    jobId,
+    mode: validated.mode,
+    ...(validated.mode === "enrichment"
+      ? { ranksCount: Object.keys(validated.ranks ?? {}).length }
+      : { taxaCount: (validated.taxa ?? []).length }),
+  });
+
   const doResponse = await stub.fetch("http://do/dispatch", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(dispatchBody),
   });
   if (!doResponse.ok) {
+    log("index", "error", "job dispatch rejected by coordinator", { jobId, status: doResponse.status });
     // Forward the DO's own {error, message} body verbatim rather than reinventing it.
     return new Response(doResponse.body, { status: doResponse.status, headers: doResponse.headers });
   }
+  log("index", "info", "job dispatch accepted", { jobId, status: doResponse.status });
 
   return Response.json(
     {
@@ -107,6 +122,7 @@ function forwardToDO(env: Env, jobId: string, path: string, request: Request): P
 async function handleResult(env: Env, jobId: string): Promise<Response> {
   const object = await env.TAXSEA_BUCKET.get(`jobs/${jobId}/output.json`);
   if (!object) {
+    log("index", "info", "job result requested: not found", { jobId });
     return jsonError(404, "not_found", "No result available for this job");
   }
   return new Response(object.body, {
