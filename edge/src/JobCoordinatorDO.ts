@@ -14,10 +14,22 @@ function jsonError(status: number, error: string, message: string): Response {
   return Response.json({ error, message }, { status });
 }
 
-/** Strips absolute filesystem paths and truncates, so an R error that echoes submitted
- * input content or a container path never reaches the client raw (docs/api.md #6). */
-function sanitizeError(message: string): string {
-  return message.replace(/\/(?:[^\s"'()]+\/)*[^\s"'()]+/g, "[path]").slice(0, MAX_ERROR_LENGTH);
+/** Strips absolute filesystem paths and the shared secret, and truncates, so an R error that
+ * echoes submitted input content, a container path, or the environment never reaches the
+ * client raw (docs/api.md #6).
+ *
+ * The secret redaction duplicates `worker/main.py`'s `_sanitize_error` on purpose (issue #70).
+ * The container-side pass always runs first today, so this is currently redundant -- but that
+ * is a call-ordering coincidence, not a guarantee. Any future path that reaches here without
+ * having gone through main.py (a different container entrypoint, an error raised by the DO
+ * itself while handling a container response) would otherwise have no redaction at all. Two
+ * independent passes cost one string replace; relying on ordering costs a leaked secret. */
+function sanitizeError(message: string, secret?: string): string {
+  const withoutPaths = message.replace(/\/(?:[^\s"'()]+\/)*[^\s"'()]+/g, "[path]");
+  // Guard against a short/empty secret turning this into a replace-everything.
+  const redacted =
+    secret && secret.length >= 8 ? withoutPaths.split(secret).join("[redacted]") : withoutPaths;
+  return redacted.slice(0, MAX_ERROR_LENGTH);
 }
 
 type ScheduleName = "onJobTimeout" | "onCleanup";
@@ -281,7 +293,7 @@ export async function runJob(
     });
     await finalizeState(deps, {
       status: "failed",
-      error: sanitizeError(result.error),
+      error: sanitizeError(result.error, deps.env.WORKER_SHARED_SECRET),
       executionTimeMs: result.executionTimeMs,
     });
     return;
