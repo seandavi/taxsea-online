@@ -146,7 +146,7 @@ describe("forwardToDO origin preservation", () => {
 
 describe("rate limiting", () => {
   it("returns 429 with Retry-After once the per-IP limit is exceeded", async () => {
-    // wrangler.toml's [[ratelimits.simple]]: limit = 10, period = 60.
+    // wrangler.toml's [[ratelimits.simple]]: limit = 3, period = 60 (issue #69).
     const ip = freshIp();
     let last: Response | undefined;
     for (let i = 0; i < 11; i++) {
@@ -178,7 +178,7 @@ describe("GET /api/jobs/:jobId/result", () => {
     expect(json).toMatchObject({ error: "not_found" });
   });
 
-  it("streams the R2 object with the right Content-Type and Cache-Control when present", async () => {
+  it("streams the R2 object with the right Content-Type, and does not allow it to be cached", async () => {
     const jobId = crypto.randomUUID();
     const output = { jobId, status: "completed", executionTimeMs: 1, taxsea: {}, results: {} };
     await env.TAXSEA_BUCKET.put(`jobs/${jobId}/output.json`, JSON.stringify(output));
@@ -186,7 +186,9 @@ describe("GET /api/jobs/:jobId/result", () => {
     const response = await handleRequest(getJob(jobId, "result"), env);
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe("application/json");
-    expect(response.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
+    // issue #68: results may be unpublished research data, and a public year-long cache
+    // would outlive the 7-day R2 retention docs/infra.md promises.
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     await expect(response.json()).resolves.toEqual(output);
   });
 });
@@ -228,7 +230,24 @@ describe("POST /api/jobs success", () => {
     });
     const response = await handleRequest(getJob(jobId, "state"), fakeEnv);
     expect(response.status).toBe(200);
+    // issue #68: job status is mutable and per-job -- nothing should retain it.
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
     await expect(response.json()).resolves.toMatchObject({ jobId, status: "running" });
+  });
+
+  it("leaves the /ws upgrade response untouched so the socket survives", async () => {
+    // The no-store rewrite above must not apply here: reconstructing the response would
+    // drop its `webSocket` and silently break every WebSocket connection (issue #68).
+    const jobId = crypto.randomUUID();
+    const [client] = Object.values(new WebSocketPair());
+    const fakeEnv = envWithFakeCoordinator((path) => {
+      expect(path).toBe("/ws");
+      return new Response(null, { status: 101, webSocket: client });
+    });
+    const response = await handleRequest(getJob(jobId, "ws"), fakeEnv);
+    expect(response.status).toBe(101);
+    expect(response.webSocket).toBe(client);
+    expect(response.headers.get("Cache-Control")).toBeNull();
   });
 });
 

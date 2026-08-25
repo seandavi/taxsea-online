@@ -396,7 +396,11 @@ export async function onCleanup(deps: JobCoordinatorDeps): Promise<void> {
 export class JobCoordinatorDO extends Container<Env> {
   defaultPort = 8080;
   // Each DO serves exactly one job; there is nothing left to keep warm once it finishes.
-  sleepAfter = "1m";
+  // "1m" contradicted that comment and was the dominant term in how long a container slot
+  // stayed occupied -- boot + runtime is ~15-50s, so a full idle minute on top roughly
+  // doubled it and was the main driver of the capacity exhaustion in issue #69. 5s only
+  // covers the teardown window.
+  sleepAfter = "5s";
   pingEndpoint = "/health";
   // The container executes user-supplied input through R with zero network egress -- a
   // deliberate security property, not an oversight. Do not flip this on to add a storage

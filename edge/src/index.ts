@@ -139,8 +139,13 @@ async function handleResult(env: Env, jobId: string): Promise<Response> {
     status: 200,
     headers: {
       "Content-Type": "application/json",
-      // The object is immutable once written (docs/api.md #7).
-      "Cache-Control": "public, max-age=31536000, immutable",
+      // `private, no-store`, NOT `public, max-age=31536000` (issue #68). The object *is*
+      // immutable once written, but immutability is a property of the object -- it is not a
+      // reason to let every shared proxy and browser disk cache keep a copy. Submissions may
+      // be unpublished research data (docs/development.md), and a year-long public cache
+      // outlives the 7-day R2 retention docs/infra.md promises, so the retention guarantee
+      // would not hold end-to-end.
+      "Cache-Control": "private, no-store",
     },
   });
 }
@@ -198,7 +203,20 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
       return jsonError(400, "invalid_request", "jobId must be a valid UUID", "jobId");
     }
     if (action === "result") return handleResult(env, jobId);
-    return forwardToDO(env, jobId, `/${action}`, request);
+    const forwarded = await forwardToDO(env, jobId, `/${action}`, request);
+    // Job status is mutable and per-job; nothing should retain it (issue #68). Deliberately
+    // NOT applied to `ws`: that response carries a `webSocket` and reconstructing it here
+    // would drop the socket and break the upgrade.
+    if (action === "state") {
+      const headers = new Headers(forwarded.headers);
+      headers.set("Cache-Control", "no-store");
+      return new Response(forwarded.body, {
+        status: forwarded.status,
+        statusText: forwarded.statusText,
+        headers,
+      });
+    }
+    return forwarded;
   }
 
   return withSecurityHeaders(await env.ASSETS.fetch(request));
