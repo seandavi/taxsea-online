@@ -81,3 +81,49 @@ describe('Results', () => {
     expect(screen.getByText('No enriched sets')).toBeTruthy();
   });
 });
+
+describe('Results: matched/unmatched taxa (issue #64)', () => {
+  function withInput(input: TaxSEAOutput['taxsea']['input']): JobConnectionState {
+    const result = { ...FIXTURE, taxsea: { ...FIXTURE.taxsea, input } } as TaxSEAOutput;
+    return { ...BASE, state: jobState(), result };
+  }
+
+  it('warns when some taxa were dropped, naming them', () => {
+    render(
+      <Results
+        job={withInput({
+          submitted: 4,
+          matched: 2,
+          unmatched: ['Blortococcus_fakeus', 's__Escherichia_coli'],
+          unmatchedTruncated: false,
+        })}
+      />,
+    );
+    expect(screen.getByText(/2 of 4 taxa matched/)).toBeTruthy();
+    // Appears twice: once as the example in the explanation, once in the dropped list.
+    expect(screen.getAllByText('s__Escherichia_coli').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('shows no warning when everything matched', () => {
+    render(<Results job={withInput({ submitted: 4, matched: 4, unmatched: [], unmatchedTruncated: false })} />);
+    expect(screen.queryByText(/were not recognised/)).toBeNull();
+    // ...but the count is still reported in the metadata list.
+    expect(screen.getByText('4 of 4')).toBeTruthy();
+  });
+
+  it('says the list is partial when the worker truncated it', () => {
+    render(
+      <Results
+        job={withInput({ submitted: 500, matched: 100, unmatched: ['a_name'], unmatchedTruncated: true })}
+      />,
+    );
+    expect(screen.getByText(/first 1/)).toBeTruthy();
+  });
+
+  it('renders results from before the field existed', () => {
+    // output.json written to R2 prior to #64 has no taxsea.input at all.
+    render(<Results job={withInput(undefined)} />);
+    expect(screen.queryByText(/matched the TaxSEA reference database/)).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Results' })).toBeTruthy();
+  });
+});

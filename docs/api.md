@@ -300,7 +300,13 @@ to R2 at `jobs/{jobId}/output.json` by the DO **unchanged**:
   "taxsea": {
     "packageVersion": "1.4.0",
     "mode": "enrichment",
-    "params": { "minSetSize": 5, "maxSetSize": 100 }
+    "params": { "minSetSize": 5, "maxSetSize": 100 },
+    "input": {
+      "submitted": 120,
+      "matched": 118,
+      "unmatched": ["s__Escherichia_coli", "Blortococcus_fakeus"],
+      "unmatchedTruncated": false
+    }
   },
   "results": {
     "All_databases": {
@@ -318,6 +324,30 @@ to R2 at `jobs/{jobId}/output.json` by the DO **unchanged**:
   }
 }
 ```
+
+### `taxsea.input` — matched vs. unmatched taxa
+
+TaxSEA's reference sets are keyed by NCBI taxon ID. Submitted names are resolved through
+TaxSEA's bundled `NCBI_ids` mapping, and **any name absent from it is silently dropped** before
+any statistics are computed. `taxsea.input` reports that:
+
+| Field | Meaning |
+|---|---|
+| `submitted` | how many taxon names the job supplied (de-duplicated, matching TaxSEA's own handling) |
+| `matched` | how many of them resolved to an NCBI taxon ID |
+| `unmatched` | the names that did not resolve, **capped at 100**; use `submitted - matched` for the true count |
+| `unmatchedTruncated` | `true` when `unmatched` was capped |
+
+Exact species names are required. Genus-only names and MetaPhlAn-style prefixed names
+(`s__Escherichia_coli`) do not resolve.
+
+If **no** submitted taxon matches, the job now fails with the
+`"No input taxa matched the TaxSEA reference database"` error documented in §6, rather than
+returning a `completed` envelope whose every collection has zero rows (issue #64).
+
+`taxsea.input` is absent from `output.json` objects written to R2 before this field existed;
+clients should treat it as optional.
+
 
 The `results` keys are **whatever TaxSEA returns** — the package's own example uses
 `res$All_databases`, but collection names and even column sets vary by mode and can change
