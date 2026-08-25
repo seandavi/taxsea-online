@@ -1,0 +1,100 @@
+name: CI (Worker)
+
+# Lints/tests the Python side of the worker container and verifies the image itself still
+# builds. wrangler deploy builds this image at deploy time, so a broken Dockerfile would
+# otherwise only surface during a production deploy. Path-filtered to worker/** since image
+# builds are slow. Must be safe on fork PRs: no secrets referenced anywhere. See
+# .github/workflows/README.md.
+on:
+  pull_request:
+    paths:
+      - worker/**
+      - .github/workflows/ci-worker.yml
+  push:
+    branches:
+      - main
+    paths:
+      - worker/**
+      - .github/workflows/ci-worker.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-worker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-test:
+    name: lint-test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: worker/requirements.txt
+
+      - run: pip install -r requirements.txt
+      # No requirements-dev.txt in this repo yet -- ruff/pytest pinned inline rather than
+      # inventing a file for two packages.
+      - run: pip install ruff==0.16.4 pytest==8.4.2
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pytest
+
+  build-image:
+    name: build-image
+    runs-on: ubuntu-latest
+    # The Bioconductor base image is ~5GB; a cold build (no GHA layer cache yet) can take
+    # 20-30 minutes. Repeat runs are fast once type=gha cache is warm.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: worker
+          platforms: linux/amd64
+          # Builds only -- there is no registry to push to. Cloudflare's managed registry
+          # only receives the image via `wrangler deploy`. `load: true` pulls the built
+          # image into the local docker daemon so the R test step below can run it.
+          push: false
+          load: true
+          tags: taxsea-worker:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report image size
+        run: |
+          SIZE_BYTES=$(docker image inspect taxsea-worker:ci --format='{{.Size}}')
+          SIZE_HUMAN=$(numfmt --to=iec --suffix=B "$SIZE_BYTES")
+          echo "### Worker image size" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`taxsea-worker:ci\`: **${SIZE_HUMAN}** (${SIZE_BYTES} bytes)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run in-container R tests
+        # tests/ is in worker/.dockerignore (and never COPYed by the Dockerfile) since it has
+        # no business in the production image; bind-mount it in just for this check. WORKDIR
+        # in the image is /app, which is where worker.R and the fixture-relative paths in
+        # test_worker_r.R expect to run from.
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/worker/tests:/app/tests:ro" \
+            taxsea-worker:ci \
+            Rscript tests/test_worker_r.R
