@@ -117,6 +117,10 @@ export function validateJobPayload(body: unknown, maxTaxa: number): ValidatedJob
 
   for (const key of Object.keys(body)) {
     if (!TOP_LEVEL_KEYS.has(key)) {
+      // Reflects an attacker-controlled key back verbatim. Safe as long as it stays
+      // JSON-encoded in a response body and is rendered by React (which escapes it) --
+      // never interpolate this message into raw HTML, a template, or an error page
+      // (issue #70).
       return fail(key, `unknown field: ${key}`);
     }
   }

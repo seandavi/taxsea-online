@@ -100,3 +100,12 @@ jobs:
             echo "Health check failed: status=$STATUS" >&2
             exit 1
           fi
+
+      # The 7-day expiry rule on taxsea-jobs is applied by hand and never re-applied by the
+      # deploy, and the R2 lifecycle API replaces the entire rule set on every write -- so a
+      # future lifecycle change that forgets this rule drops it silently, and job inputs and
+      # outputs accumulate forever with the app still working perfectly (issue #70).
+      - name: Verify R2 retention policy is still in place
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: ./scripts/check-r2-lifecycle.sh
