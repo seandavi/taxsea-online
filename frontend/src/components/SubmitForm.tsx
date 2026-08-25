@@ -40,7 +40,11 @@ export default function SubmitForm({ onSubmitted }: SubmitFormProps) {
   const [retryAfter, setRetryAfter] = useState<number | null>(null);
   const [submitted, setSubmitted] = useState<JobCreatedResponse | null>(null);
 
-  const parsed = useMemo(() => parseInput(text, mode), [text, mode]);
+  // null until the user picks one. Never pre-selected: a default column is the #63 bug.
+  const [rankColumn, setRankColumn] = useState<number | null>(null);
+
+  const parsed = useMemo(() => parseInput(text, mode, rankColumn ?? undefined), [text, mode, rankColumn]);
+  const columns = parsed.mode === 'enrichment' ? parsed.columns : null;
 
   // 429 countdown.
   useEffect(() => {
@@ -54,12 +58,14 @@ export default function SubmitForm({ onSubmitted }: SubmitFormProps) {
   function switchMode(next: Mode) {
     setMode(next);
     setText('');
+    setRankColumn(null);
     setSubmitError(null);
     setSubmitted(null);
   }
 
   function loadExample() {
     setText(exampleTextFor(mode));
+    setRankColumn(null);
     if (mode === 'enrichment') {
       setMinSetSizeInput(String(EXAMPLE_ENRICHMENT_OPTIONS.minSetSize));
       setMaxSetSizeInput(String(EXAMPLE_ENRICHMENT_OPTIONS.maxSetSize));
@@ -169,7 +175,12 @@ export default function SubmitForm({ onSubmitted }: SubmitFormProps) {
           id="taxa-input"
           rows={12}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            // New paste, new shape -- a column chosen for the old text would silently
+            // apply to different data.
+            setRankColumn(null);
+          }}
           placeholder={
             mode === 'enrichment'
               ? 'Bifidobacterium_longum\t2.45\nRuminococcus_bromii\t-3.05'
@@ -189,6 +200,33 @@ export default function SubmitForm({ onSubmitted }: SubmitFormProps) {
           Load example data
         </button>
       </div>
+
+      {columns && (
+        <div className="flex flex-col gap-2 rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/40">
+          <label htmlFor="rank-column" className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+            This input has {columns.length} columns — which one holds the rank value?
+          </label>
+          <p className="text-sm text-amber-800 dark:text-amber-300">
+            Column 1 is used as the taxon name. Nothing is analysed until you choose, so that a
+            table like DESeq2 output is never ranked by the wrong statistic.
+          </p>
+          <select
+            id="rank-column"
+            value={rankColumn === null ? '' : String(rankColumn)}
+            onChange={(e) => setRankColumn(e.target.value === '' ? null : Number(e.target.value))}
+            className="self-start rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+          >
+            <option value="">Select a column…</option>
+            {columns.map((label, i) =>
+              i === 0 ? null : (
+                <option key={label} value={i}>
+                  {label}
+                </option>
+              ),
+            )}
+          </select>
+        </div>
+      )}
 
       {parsed.errors.length > 0 && (
         <ul

@@ -159,3 +159,70 @@ describe('parseInput ORA mode', () => {
     expect(r.errors[0]).toMatchObject({ line: 2, text: 'Bad;Name' });
   });
 });
+
+describe('parseInput enrichment mode: multi-column input (issue #63)', () => {
+  // A real DESeq2 results table. The bug: the last column (padj) was silently used as the
+  // rank, so results were ranked by adjusted p-value instead of log2FoldChange.
+  const DESEQ2 = [
+    'taxon,baseMean,log2FoldChange,lfcSE,stat,pvalue,padj',
+    'Bifidobacterium_longum,142.5,2.45,0.31,7.90,2.8e-15,1.1e-13',
+    'Ruminococcus_bromii,88.1,-3.05,0.44,-6.93,4.2e-12,9.7e-11',
+  ].join('\n');
+
+  it('does not silently pick a column, and parses nothing until told which', () => {
+    const r = parseInput(DESEQ2, 'enrichment');
+    if (r.mode !== 'enrichment') throw new Error('unreachable');
+    expect(r.columns).toHaveLength(7);
+    expect(r.count).toBe(0);
+    expect(r.ranks).toEqual({});
+    expect(r.rangeError).toMatch(/choose which one holds the rank value/);
+    // The old behavior, asserted dead: padj must not have become the rank.
+    expect(Object.values(r.ranks)).not.toContain(1.1e-13);
+  });
+
+  it('labels columns by number and header name for the picker', () => {
+    const r = parseInput(DESEQ2, 'enrichment');
+    if (r.mode !== 'enrichment') throw new Error('unreachable');
+    expect(r.columns?.[2]).toBe('Column 3 — log2FoldChange');
+  });
+
+  it('ranks by the chosen column once one is given', () => {
+    const r = parseInput(DESEQ2, 'enrichment', 2);
+    if (r.mode !== 'enrichment') throw new Error('unreachable');
+    expect(r.errors).toEqual([]);
+    expect(r.ranks).toEqual({ Bifidobacterium_longum: 2.45, Ruminococcus_bromii: -3.05 });
+  });
+
+  it('a different chosen column really changes the ranks', () => {
+    const r = parseInput(DESEQ2, 'enrichment', 1);
+    if (r.mode !== 'enrichment') throw new Error('unreachable');
+    expect(r.ranks).toEqual({ Bifidobacterium_longum: 142.5, Ruminococcus_bromii: 88.1 });
+  });
+
+  it('leaves two-column input untouched -- no picker, no column choice needed', () => {
+    const r = parseInput('Bifidobacterium_longum\t2.45\nRuminococcus_bromii\t-3.05', 'enrichment');
+    if (r.mode !== 'enrichment') throw new Error('unreachable');
+    expect(r.columns).toBeNull();
+    expect(r.errors).toEqual([]);
+    expect(r.ranks).toEqual({ Bifidobacterium_longum: 2.45, Ruminococcus_bromii: -3.05 });
+  });
+
+  it('still accepts a whitespace-separated name containing spaces', () => {
+    const r = parseInput('Bifidobacterium longum 2.45', 'enrichment');
+    if (r.mode !== 'enrichment') throw new Error('unreachable');
+    expect(r.columns).toBeNull();
+    expect(r.ranks).toEqual({ Bifidobacterium_longum: 2.45 });
+  });
+
+  it('refuses to guess on space-separated input with several numeric columns', () => {
+    // e.g. a table copied straight out of the R console, where the name boundary is
+    // genuinely ambiguous -- so this errors rather than offering a picker.
+    const r = parseInput(
+      'Bifidobacterium_longum 142.5 2.45 0.31\nRuminococcus_bromii 88.1 -3.05 0.44',
+      'enrichment',
+    );
+    if (r.mode !== 'enrichment') throw new Error('unreachable');
+    expect(r.count).toBe(0);
+    expect(r.errors[0]?.message).toMatch(/more than one numeric column/);
+  });
+});
