@@ -11,7 +11,7 @@ metabolite producers, disease associations, curated signatures from BugSigDB, Mi
 GutMGene, mBodyMap, and GMRepoV2 — are enriched in it, without installing R or Bioconductor
 locally.
 
-**Live:** <!-- TODO: production URL once issue #20 deploys -->
+**Live:** https://taxsea-online.seandavi.workers.dev
 
 ## How it works
 
