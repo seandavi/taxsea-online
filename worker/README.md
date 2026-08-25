@@ -7,6 +7,9 @@ Durable Object passes input by value and receives the result by value (see PLAN.
 Built and deployed as a Cloudflare Container declared in `/edge/wrangler.toml`; there is no
 standalone deploy pipeline for this directory.
 
+See [`../docs/development.md`](../docs/development.md) for exercising `POST /run` with
+`curl` against a fixture payload, and for the whole-stack local setup.
+
 ## Image size
 
 `docker build --platform linux/amd64 -t taxsea-worker:test -f Dockerfile .` produces a

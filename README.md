@@ -5,6 +5,27 @@ An asynchronous web service for taxon-set enrichment analysis using the Biocondu
 list from a React SPA, the job runs in an on-demand Cloudflare Container, and results stream
 back over a WebSocket — no external queue, database, or second cloud.
 
+For microbiome researchers who have a differential-abundance result (a ranked list of taxa,
+or just a taxon list from an ORA-style workflow) and want to know whether known taxon sets —
+metabolite producers, disease associations, curated signatures from BugSigDB, MiMeDB,
+GutMGene, mBodyMap, and GMRepoV2 — are enriched in it, without installing R or Bioconductor
+locally.
+
+**Live:** <!-- TODO: production URL once issue #20 deploys -->
+
+## How it works
+
+A submission is a single async job, not a request/response call: `POST /api/jobs` returns
+immediately with a `jobId` and hands off to a `JobCoordinatorDO` (a Cloudflare Durable
+Object), which writes the input to R2, boots a fresh, per-job Cloudflare Container bound
+directly to itself, and calls it synchronously over a private port. The container runs
+TaxSEA via `Rscript` with no network access and no storage credentials, returns the result
+by value in the HTTP response, and the DO writes it to R2 and flips the job to `completed`.
+The frontend either holds open a WebSocket for a live push the instant that happens, or
+polls `/state` as a fallback, then fetches `/result`, which the Worker proxies from R2 so
+the bucket itself is never public. See "Architecture" below and
+[`docs/api.md`](./docs/api.md) for the full contract.
+
 ## Architecture
 
 Everything ships from a single `wrangler deploy`: the Worker, the `JobCoordinatorDO` Durable
@@ -54,9 +75,37 @@ through the Worker** rather than fetched from a public bucket or a second domain
 | [`/docs`](./docs/README.md) | API contracts, infrastructure, and development docs |
 | [`/.github/workflows`](./.github/workflows/README.md) | CI and deploy workflows |
 
+## Local development
+
+See [`docs/development.md`](./docs/development.md) for the full three-component local setup,
+including the exact terminal-by-terminal sequence to run the whole stack and a
+troubleshooting section for the common failure modes.
+
 ## Contributing
 
 See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+
+## Citation
+
+This service is a thin web wrapper around the Bioconductor package **TaxSEA**; the
+enrichment analysis itself is entirely TaxSEA's. If you use results from this service in
+published work, cite the package:
+
+> Pham CM, Rankin TJ, Stinear TP, Walsh CJ, Ryan FJ. TaxSEA: rapid interpretation of
+> microbiome alterations using taxon set enrichment analysis and public databases.
+> *Briefings in Bioinformatics*. 2025;26(2):bbaf173. doi:
+> [10.1093/bib/bbaf173](https://doi.org/10.1093/bib/bbaf173)
+
+Package homepage: [bioconductor.org/packages/TaxSEA](https://bioconductor.org/packages/TaxSEA/)
+· source: [github.com/feargalr/TaxSEA](https://github.com/feargalr/TaxSEA)
+
+## License
+
+This repository (the Worker, Durable Object, container wrapper, frontend, and docs) is
+[MIT-licensed](./LICENSE). TaxSEA itself is **GPL-3** and is never linked into or
+redistributed as part of this codebase — it is installed in the container image and
+invoked as an arm's-length `Rscript` subprocess (see [`worker/worker.R`](./worker/worker.R)),
+the same relationship any GPL command-line tool has when shelled out to.
 
 ## Further reading
 
