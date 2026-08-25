@@ -178,7 +178,7 @@ export default function About() {
         </ul>
       </section>
 
-      <section className="flex flex-col gap-2">
+      <section id="citation" className="flex flex-col gap-2">
         <SectionHeading>Citation</SectionHeading>
         <p className="text-sm text-slate-700 dark:text-slate-300">
           This service is a thin web wrapper around TaxSEA; the enrichment analysis itself is entirely TaxSEA's. If
@@ -196,6 +196,19 @@ export default function About() {
           >
             10.1093/bib/bbaf173
           </a>
+        </p>
+        <p className="text-sm text-slate-700 dark:text-slate-300">
+          A citation for TaxSEA-online itself (this web service) will be added here once it's published. Until then,
+          if you'd like to reference the service, please link to the{' '}
+          <a
+            href="https://github.com/seandavi/taxsea-online"
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-blue-600 underline-offset-4 hover:underline dark:text-blue-400"
+          >
+            GitHub repository
+          </a>
+          .
         </p>
       </section>
     </main>

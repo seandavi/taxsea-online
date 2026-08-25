@@ -78,6 +78,13 @@ export default function App() {
             </a>
             , by Feargal Ryan.
           </p>
+          <p className="mt-1">
+            Using these results in published work? Please{' '}
+            <Link to="/about#citation" className="font-medium text-blue-600 underline-offset-4 hover:underline dark:text-blue-400">
+              cite TaxSEA
+            </Link>
+            . A citation for TaxSEA-online itself is pending publication.
+          </p>
         </div>
       </footer>
     </>
