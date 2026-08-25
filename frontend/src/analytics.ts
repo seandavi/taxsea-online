@@ -20,9 +20,16 @@ declare global {
 
 export function initAnalytics(): void {
   window.dataLayer = window.dataLayer || [];
-  function gtag(...args: unknown[]) {
-    window.dataLayer.push(args);
-  }
+  // Pushes the `arguments` object itself, exactly as Google's snippet does. This looks like
+  // something a rest parameter should replace, and it isn't: gtag.js only treats an
+  // Arguments object as a gtag command, and silently ignores a plain Array. Pushing
+  // `[...args]` here made 'js'/'config' never register and GA report nothing at all, with
+  // no console error to show for it. The cast supplies the call signature without declaring
+  // parameters the body deliberately doesn't read.
+  const gtag = function () {
+    // eslint-disable-next-line prefer-rest-params
+    window.dataLayer.push(arguments);
+  } as (...args: unknown[]) => void;
   gtag('js', new Date());
   gtag('config', GA_MEASUREMENT_ID);
 }
