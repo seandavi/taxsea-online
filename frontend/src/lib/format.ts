@@ -26,8 +26,9 @@ export function formatCell(columnName: string, value: number | string | null | u
 
 type Cell = number | string | null | undefined;
 
-/** Ascending comparator for two non-null cell values. */
-function compareValues(a: number | string, b: number | string): number {
+/** Ascending comparator for two non-null cell values. Exported for reuse as a TanStack Table
+ * `sortFn` (ResultTable.tsx) so both the hand-rolled and table-library sort paths agree. */
+export function compareValues(a: number | string, b: number | string): number {
   if (typeof a === 'number' && typeof b === 'number') return a - b;
   return String(a).localeCompare(String(b));
 }

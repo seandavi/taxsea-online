@@ -1,8 +1,19 @@
-// One sortable/filterable table for one result collection (issue #16). Column set is whatever
-// `collection.columns` says -- never hardcoded -- so an unexpected extra column still renders.
+// One sortable/filterable table for one result collection (issue #16, rebuilt on TanStack Table
+// for issue #54). Column set is whatever `collection.columns` says -- never hardcoded -- so an
+// unexpected extra column still renders.
+//
+// @tanstack/react-table is on v9, a from-scratch rewrite of the v8 API this issue was written
+// against (useReactTable/ColumnDef). v9 ships `@tanstack/react-table/legacy` as an official,
+// fully-supported compatibility layer that restores the v8-shaped hook/types (`useLegacyTable`,
+// `LegacyColumnDef`, `getCoreRowModel`/`getSortedRowModel` markers) -- that's what's used below,
+// since it's the shortest path to the v8-style API the acceptance criteria describe.
 import { useMemo, useState } from 'react';
+import { flexRender } from '@tanstack/react-table';
+import type { SortingState } from '@tanstack/react-table';
+import { getCoreRowModel, getSortedRowModel, useLegacyTable } from '@tanstack/react-table/legacy';
+import type { LegacyColumnDef } from '@tanstack/react-table/legacy';
 import type { TaxSEAResultCollection } from '../hooks/useTaxSEAJob';
-import { formatCell, sortRows } from '../lib/format';
+import { compareValues, formatCell } from '../lib/format';
 import { downloadCollectionTSV } from '../lib/download';
 
 export interface ResultTableProps {
@@ -11,15 +22,16 @@ export interface ResultTableProps {
   collection: TaxSEAResultCollection;
 }
 
-type SortDir = 'asc' | 'desc';
+type RowRecord = TaxSEAResultCollection['rows'][number];
 
 export default function ResultTable({ jobId, collectionName, collection }: ResultTableProps) {
   const { columns, rows } = collection;
   const hasTaxonFilter = columns.includes('taxonSetName');
 
-  const [sortColumn, setSortColumn] = useState<string | null>(columns.includes('FDR') ? 'FDR' : null);
-  const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [filterText, setFilterText] = useState('');
+  const [sorting, setSorting] = useState<SortingState>(() =>
+    columns.includes('FDR') ? [{ id: 'FDR', desc: false }] : [],
+  );
 
   const filteredRows = useMemo(() => {
     if (!hasTaxonFilter || filterText.trim() === '') return rows;
@@ -27,24 +39,48 @@ export default function ResultTable({ jobId, collectionName, collection }: Resul
     return rows.filter((row) => String(row.taxonSetName ?? '').toLowerCase().includes(needle));
   }, [rows, filterText, hasTaxonFilter]);
 
-  const sortedRows = useMemo(
-    () => (sortColumn === null ? filteredRows : sortRows(filteredRows, sortColumn, sortDir)),
-    [filteredRows, sortColumn, sortDir],
+  const columnDefs = useMemo<LegacyColumnDef<RowRecord>[]>(
+    () =>
+      columns.map((col) => ({
+        id: col,
+        header: col,
+        // null -> undefined so `sortUndefined: 'last'` (below) keeps missing values at the end
+        // regardless of sort direction; formatCell renders null/undefined identically anyway.
+        accessorFn: (row: RowRecord) => row[col] ?? undefined,
+        cell: (info) => formatCell(col, info.getValue() as number | string | null | undefined),
+        sortFn: (rowA, rowB, columnId) =>
+          compareValues(rowA.getValue(columnId) as number | string, rowB.getValue(columnId) as number | string),
+        sortUndefined: 'last',
+      })),
+    [columns],
   );
 
-  function handleSort(column: string) {
-    if (sortColumn === column) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortColumn(column);
-      setSortDir('asc');
-    }
+  const table = useLegacyTable<RowRecord>({
+    data: filteredRows,
+    columns: columnDefs,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
+
+  // Single-column sort, no "unsorted" step: clicking the active header flips direction; clicking
+  // a different header resets to ascending. Driven directly rather than TanStack's default
+  // toggle handler (which cycles through removing the sort) to keep the original behavior.
+  function handleSort(columnId: string) {
+    setSorting((prev) => {
+      const current = prev[0];
+      return current?.id === columnId ? [{ id: columnId, desc: !current.desc }] : [{ id: columnId, desc: false }];
+    });
   }
 
-  function ariaSortFor(column: string): 'ascending' | 'descending' | 'none' {
-    if (sortColumn !== column) return 'none';
-    return sortDir === 'asc' ? 'ascending' : 'descending';
+  function ariaSortFor(sorted: false | 'asc' | 'desc'): 'ascending' | 'descending' | 'none' {
+    if (sorted === 'asc') return 'ascending';
+    if (sorted === 'desc') return 'descending';
+    return 'none';
   }
+
+  const tableRows = table.getRowModel().rows;
 
   return (
     <section className="flex flex-col gap-3">
@@ -78,30 +114,32 @@ export default function ResultTable({ jobId, collectionName, collection }: Resul
           <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-800">
             <table className="w-full min-w-max border-collapse text-sm">
               <thead className="bg-slate-50 dark:bg-slate-900">
-                <tr>
-                  {columns.map((col) => (
-                    <th
-                      key={col}
-                      aria-sort={ariaSortFor(col)}
-                      className="whitespace-nowrap border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-900 aria-[sort=ascending]:after:ml-1 aria-[sort=ascending]:after:content-['▲'] aria-[sort=descending]:after:ml-1 aria-[sort=descending]:after:content-['▼'] dark:border-slate-800 dark:text-slate-100"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => handleSort(col)}
-                        className="font-semibold hover:text-blue-600 dark:hover:text-blue-400"
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <tr key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <th
+                        key={header.id}
+                        aria-sort={ariaSortFor(header.column.getIsSorted())}
+                        className="whitespace-nowrap border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-900 aria-[sort=ascending]:after:ml-1 aria-[sort=ascending]:after:content-['▲'] aria-[sort=descending]:after:ml-1 aria-[sort=descending]:after:content-['▼'] dark:border-slate-800 dark:text-slate-100"
                       >
-                        {col}
-                      </button>
-                    </th>
-                  ))}
-                </tr>
+                        <button
+                          type="button"
+                          onClick={() => handleSort(header.column.id)}
+                          className="font-semibold hover:text-blue-600 dark:hover:text-blue-400"
+                        >
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                        </button>
+                      </th>
+                    ))}
+                  </tr>
+                ))}
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                {sortedRows.map((row, i) => (
-                  <tr key={i} className="hover:bg-slate-50 dark:hover:bg-slate-900/50">
-                    {columns.map((col) => (
-                      <td key={col} className="whitespace-nowrap px-3 py-2 text-slate-700 dark:text-slate-300">
-                        {formatCell(col, row[col])}
+                {tableRows.map((row) => (
+                  <tr key={row.id} className="hover:bg-slate-50 dark:hover:bg-slate-900/50">
+                    {row.getVisibleCells().map((cell) => (
+                      <td key={cell.id} className="whitespace-nowrap px-3 py-2 text-slate-700 dark:text-slate-300">
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
                     ))}
                   </tr>
@@ -109,7 +147,7 @@ export default function ResultTable({ jobId, collectionName, collection }: Resul
               </tbody>
             </table>
           </div>
-          {sortedRows.length === 0 && (
+          {tableRows.length === 0 && (
             <p className="text-sm text-slate-600 dark:text-slate-400">No rows match the filter.</p>
           )}
         </>
