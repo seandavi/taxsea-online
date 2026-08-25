@@ -1,0 +1,298 @@
+import { Container } from "@cloudflare/containers";
+import type { ContainerRunResponse, JobPayload, JobState } from "./types";
+
+const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const STATE_KEY = "state";
+const CLEANUP_DELAY_SECONDS = 24 * 60 * 60;
+const MAX_ERROR_LENGTH = 2000; // docs/api.md #6
+
+const inputKey = (jobId: string) => `jobs/${jobId}/input.json`;
+const outputKey = (jobId: string) => `jobs/${jobId}/output.json`;
+
+function jsonError(status: number, error: string, message: string): Response {
+  return Response.json({ error, message }, { status });
+}
+
+/** Strips absolute filesystem paths and truncates, so an R error that echoes submitted
+ * input content or a container path never reaches the client raw (docs/api.md #6). */
+function sanitizeError(message: string): string {
+  return message.replace(/\/(?:[^\s"'()]+\/)*[^\s"'()]+/g, "[path]").slice(0, MAX_ERROR_LENGTH);
+}
+
+type ScheduleName = "onJobTimeout" | "onCleanup";
+
+/**
+ * The storage/container/scheduling surface the coordination logic below needs, narrowed to
+ * exactly what it uses.
+ *
+ * This is injected rather than read off `this` directly for one concrete reason:
+ * `@cloudflare/vitest-plugin` (as of 1.0.0) cannot construct a `Container` subclass at all --
+ * its constructor throws `"Containers have not been enabled for this Durable Object class"`
+ * unless `ctx.container` is already populated, and the test pool never provisions that (the
+ * container-resolution code for it exists in the plugin's bundle but is dead -- never
+ * called). So every acceptance-criteria test below runs the exact same functions this class
+ * uses, against fakes/spies, since a real `JobCoordinatorDO` instance is not obtainable in
+ * this test environment regardless of mocking `containerFetch`. `JobCoordinatorDO` itself
+ * stays a thin, effectively-untestable wrapper for exactly the same reason.
+ */
+export interface JobCoordinatorDeps {
+  env: Env;
+  storage: {
+    get<T>(key: string): Promise<T | undefined>;
+    put<T>(key: string, value: T): Promise<void>;
+    deleteAll(): Promise<void>;
+  };
+  waitUntil: (promise: Promise<unknown>) => void;
+  containerFetch: (url: string, init: RequestInit) => Promise<Response>;
+  schedule: (delaySeconds: number, callback: ScheduleName) => Promise<unknown>;
+  deleteSchedules: (callback: ScheduleName) => void;
+  broadcast: (state: JobState) => void;
+}
+
+/** Routes `/dispatch`, `/state` and `/ws`. Only `/dispatch` ever calls containerFetch -- a
+ * status poll or WS upgrade must never boot a multi-GB container. */
+export async function handleFetch(deps: JobCoordinatorDeps, request: Request): Promise<Response> {
+  const { pathname } = new URL(request.url);
+
+  switch (pathname) {
+    case "/dispatch":
+      return request.method === "POST"
+        ? handleDispatch(deps, request)
+        : new Response("Method Not Allowed", { status: 405 });
+    case "/state":
+      return request.method === "GET"
+        ? handleState(deps)
+        : new Response("Method Not Allowed", { status: 405 });
+    case "/ws":
+      // ponytail: the hibernation WebSocket channel is issue #10. All that matters here is
+      // that this route exists and never touches containerFetch.
+      return new Response("WebSocket channel not yet implemented", { status: 501 });
+    default:
+      return new Response("Not Found", { status: 404 });
+  }
+}
+
+async function handleDispatch(deps: JobCoordinatorDeps, request: Request): Promise<Response> {
+  let body: JobPayload;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonError(400, "invalid_request", "Body must be valid JSON");
+  }
+
+  const { jobId, ...payload } = body;
+  // Defense in depth: the router mints jobId with crypto.randomUUID() and this DO is
+  // addressed by it, but the value still arrives as untrusted request-body data and is about
+  // to be interpolated into an R2 key, so it is re-validated here (docs/api.md #4).
+  if (typeof jobId !== "string" || !JOB_ID_RE.test(jobId)) {
+    return jsonError(400, "invalid_request", "jobId must be a valid UUIDv4");
+  }
+
+  if (await deps.storage.get<JobState>(STATE_KEY)) {
+    return jsonError(409, "already_dispatched", "This job has already been dispatched");
+  }
+
+  const now = Date.now();
+  await deps.env.TAXSEA_BUCKET.put(inputKey(jobId), JSON.stringify({ jobId, ...payload }), {
+    httpMetadata: { contentType: "application/json" },
+  });
+
+  const state: JobState = { jobId, status: "running", createdAt: now, startedAt: now };
+  await deps.storage.put(STATE_KEY, state);
+  await deps.schedule(deps.env.JOB_TIMEOUT_MS / 1000, "onJobTimeout");
+
+  // Runs after the response below is returned; waitUntil keeps the DO alive for it even if
+  // the client disconnects immediately (PLAN.md #1.3, "fire-and-forget dispatch can
+  // vanish"). The timeout schedule armed above is the backstop if the DO is evicted anyway.
+  deps.waitUntil(runJob(deps, jobId, payload));
+
+  return Response.json(state, { status: 201 });
+}
+
+export async function runJob(deps: JobCoordinatorDeps, jobId: string, payload: JobPayload): Promise<void> {
+  let response: Response;
+  try {
+    // containerFetch, not this.fetch -- this.fetch is overridden above and would recurse.
+    response = await deps.containerFetch("http://localhost/run", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${deps.env.WORKER_SHARED_SECRET}` },
+      body: JSON.stringify({ jobId, ...payload }),
+    });
+  } catch (err) {
+    console.error(`[${jobId}] containerFetch threw -- infrastructure failure:`, err);
+    await finalizeState(deps, { status: "failed", error: "The compute container could not be reached." });
+    return;
+  }
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    console.error(`[${jobId}] containerFetch returned ${response.status} -- infrastructure failure: ${detail}`);
+    await finalizeState(deps, { status: "failed", error: "The compute container returned an unexpected error." });
+    return;
+  }
+
+  let result: ContainerRunResponse;
+  try {
+    result = await response.json();
+  } catch (err) {
+    console.error(`[${jobId}] container response was not valid JSON -- infrastructure failure:`, err);
+    await finalizeState(deps, { status: "failed", error: "The compute container returned an unexpected response." });
+    return;
+  }
+
+  if (result.status === "completed") {
+    // Write output.json before flipping state, so a client observing "completed" can always
+    // fetch a result immediately after (docs/api.md #3, PLAN.md #2.6).
+    await deps.env.TAXSEA_BUCKET.put(outputKey(jobId), JSON.stringify(result), {
+      httpMetadata: { contentType: "application/json" },
+    });
+    await finalizeState(deps, { status: "completed", executionTimeMs: result.executionTimeMs });
+    return;
+  }
+
+  if (result.status === "failed") {
+    // HTTP 200 + status: "failed" is a job-level failure (the analysis ran and failed),
+    // distinct from the infrastructure failures logged above (docs/api.md #2).
+    console.error(`[${jobId}] job failed inside the container: ${result.error}`);
+    await finalizeState(deps, {
+      status: "failed",
+      error: sanitizeError(result.error),
+      executionTimeMs: result.executionTimeMs,
+    });
+    return;
+  }
+
+  console.error(`[${jobId}] container returned an unrecognized response shape:`, result);
+  await finalizeState(deps, { status: "failed", error: "The compute container returned an unexpected response." });
+}
+
+async function finalizeState(
+  deps: JobCoordinatorDeps,
+  patch: { status: "completed" | "failed"; error?: string; executionTimeMs?: number },
+): Promise<void> {
+  const state = await deps.storage.get<JobState>(STATE_KEY);
+  if (!state || state.status !== "running") {
+    // Already finalized by a race with the timeout alarm -- nothing to do.
+    return;
+  }
+  const finishedAt = Date.now();
+  const finalState: JobState = {
+    ...state,
+    status: patch.status,
+    finishedAt,
+    executionTimeMs: patch.executionTimeMs ?? finishedAt - (state.startedAt ?? state.createdAt),
+    error: patch.error,
+  };
+  await deps.storage.put(STATE_KEY, finalState);
+  deps.deleteSchedules("onJobTimeout");
+  await deps.schedule(CLEANUP_DELAY_SECONDS, "onCleanup");
+  deps.broadcast(finalState);
+}
+
+async function handleState(deps: JobCoordinatorDeps): Promise<Response> {
+  const state = await deps.storage.get<JobState>(STATE_KEY);
+  if (!state) {
+    return jsonError(404, "not_found", "No job found for this id");
+  }
+  return Response.json(state);
+}
+
+/**
+ * Fires JOB_TIMEOUT_MS after dispatch (scheduled in handleDispatch via `deps.schedule`).
+ *
+ * Named callback rather than an `alarm()` override on purpose: `Container`'s own `alarm()`
+ * is "in charge of renewing the container activity and keeping the durable object alive"
+ * (see @cloudflare/containers' README, "Instead of using the default alarm handler, use
+ * schedule() instead"). Overriding `alarm()` here would silently break that -- sleepAfter
+ * and the container's activity timeout run through the same single DO alarm.
+ */
+export async function onJobTimeout(deps: JobCoordinatorDeps): Promise<void> {
+  const state = await deps.storage.get<JobState>(STATE_KEY);
+  if (!state || state.status !== "running") return; // already finalized
+
+  const timeoutSeconds = Math.round(deps.env.JOB_TIMEOUT_MS / 1000);
+  const finishedAt = Date.now();
+  const finalState: JobState = {
+    ...state,
+    status: "timed_out",
+    finishedAt,
+    executionTimeMs: finishedAt - (state.startedAt ?? state.createdAt),
+    error: `Job timed out after ${timeoutSeconds}s`,
+  };
+  await deps.storage.put(STATE_KEY, finalState);
+  // ponytail: if the DO was evicted mid-job, the container's in-flight result is simply
+  // lost -- it has nowhere to persist it (no storage access, PLAN.md #2.6) and the client
+  // just resubmits. Recovery-by-scanning-R2 is a deliberate v1 ceiling, not an oversight
+  // (PLAN.md #2.6); add it if lost in-flight jobs become a real support burden.
+  await deps.schedule(CLEANUP_DELAY_SECONDS, "onCleanup");
+  deps.broadcast(finalState);
+}
+
+/** Scheduled 24h after a job reaches a terminal state, so a finished job's DO storage
+ * doesn't grow unbounded. `jobs/{jobId}/{input,output}.json` in R2 are cleaned up separately
+ * by the bucket's own lifecycle rules (issue #19), not by the DO. */
+export async function onCleanup(deps: JobCoordinatorDeps): Promise<void> {
+  await deps.storage.deleteAll();
+}
+
+/**
+ * One Durable Object per job. `Container` (from `@cloudflare/containers`) extends
+ * `DurableObject`, so this class is simultaneously the job coordinator and the
+ * container-backed class bound in wrangler.toml's `[[containers]]` and
+ * `[[durable_objects.bindings]]` blocks (see /edge/wrangler.toml, issue #8).
+ *
+ * The DO owns all R2 I/O; the container never touches storage or the network
+ * (PLAN.md #2.6) -- payloads cross the DO<->container boundary by value, through the
+ * containerFetch request/response bodies only.
+ *
+ * This class is intentionally thin: every acceptance-criteria behavior lives in the plain
+ * functions above (`handleFetch`, `runJob`, `onJobTimeout`, `onCleanup`), which take an
+ * explicit `JobCoordinatorDeps`. See that interface's doc comment for why.
+ */
+export class JobCoordinatorDO extends Container<Env> {
+  defaultPort = 8080;
+  // Each DO serves exactly one job; there is nothing left to keep warm once it finishes.
+  sleepAfter = "1m";
+  pingEndpoint = "/health";
+  // The container executes user-supplied input through R with zero network egress -- a
+  // deliberate security property, not an oversight. Do not flip this on to add a storage
+  // client; the DO does all R2 I/O (PLAN.md #2.6).
+  enableInternet = false;
+  envVars = {
+    WORKER_SHARED_SECRET: this.env.WORKER_SHARED_SECRET,
+    RSCRIPT_TIMEOUT_SECONDS: String(Math.round(this.env.JOB_TIMEOUT_MS / 1000)),
+  };
+
+  private deps(): JobCoordinatorDeps {
+    return {
+      env: this.env,
+      storage: this.ctx.storage,
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+      containerFetch: (url, init) => this.containerFetch(url, init),
+      schedule: (delaySeconds, callback) => this.schedule(delaySeconds, callback),
+      deleteSchedules: (callback) => this.deleteSchedules(callback),
+      broadcast: (state) => {
+        const payload = JSON.stringify(state);
+        for (const ws of this.ctx.getWebSockets()) {
+          try {
+            ws.send(payload);
+          } catch (err) {
+            console.error(`[${state.jobId}] failed to broadcast job state to a WebSocket:`, err);
+          }
+        }
+      },
+    };
+  }
+
+  fetch(request: Request): Promise<Response> {
+    return handleFetch(this.deps(), request);
+  }
+
+  async onJobTimeout(): Promise<void> {
+    await onJobTimeout(this.deps());
+  }
+
+  async onCleanup(): Promise<void> {
+    await onCleanup(this.deps());
+  }
+}
