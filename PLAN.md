@@ -507,3 +507,33 @@ post-deploy health check does not exercise the WebSocket or job-dispatch paths a
 Parking the service under `cancerdatasci.org` was considered and explicitly deferred pending
 an ongoing discussion outside this repo. The service stays on the default `*.workers.dev` URL
 for now; don't revisit this unilaterally.
+
+### 8.5 Feature work paused: the project needs a real differentiator first
+
+**Decision (2026-08-25, maintainer): TaxSEA-online does not move forward without significant
+new functionality, algorithms, or data sources.**
+
+The trigger was landscape research that had never been done for this project — see
+`docs/landscape.md` and issue #100. TaxSEA already ships an official web portal at
+<https://shiny.taxsea.app>, advertised in the TaxSEA paper's own Data Availability statement.
+It is not merely parked: a live Shiny Server session connects, and its TLS certificate was
+renewed 12 days before this was written. Its *code* has been dormant since 2025-03, but the
+*service* is up and reachable by anyone who reads the paper and follows the link.
+
+So "run TaxSEA in a browser, free, no install" is not an unmet need, and it cannot be this
+project's contribution. The current differentiators — ORA mode, deeper result tables, no Shiny
+server to keep alive — are real but do not clear the bar. TaxSEA-online is meanwhile *behind*
+the official portal on file upload and plots.
+
+**What this means for the backlog:**
+
+- **M11 (results UX) and M13 (publication readiness) are on hold.** M13 in particular rests on a
+  premise that does not hold: #81-#85 position this as *the* TaxSEA web interface, and a
+  citable release staking that claim would publish against a portal the TaxSEA paper cites.
+- **Work that stands regardless** is anything owed by operating a public service at all —
+  security (M10, done) and correct attribution to BugSigDB/MiMeDB/gutMGene (M12). Running the
+  thing creates those obligations whether or not it has a future.
+- **Do not resume M11/M13 on momentum.** Resuming requires a differentiator that clears the bar
+  above, agreed explicitly — not an accumulation of polish.
+
+This supersedes the M9→M13 priority ordering in §8.2 for M11 and M13.
