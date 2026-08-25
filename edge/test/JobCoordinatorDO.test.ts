@@ -38,7 +38,8 @@ function createDeps(containerFetch: JobCoordinatorDeps["containerFetch"] = vi.fn
     containerFetch,
     schedule: vi.fn(async () => undefined),
     deleteSchedules: vi.fn(),
-    broadcast: vi.fn(),
+    acceptWebSocket: vi.fn(),
+    getWebSockets: () => [],
   };
   return { deps, storage, waitForBackground: () => background };
 }
