@@ -1,0 +1,6 @@
+# Copy this file to .dev.vars (gitignored) and fill in a real value for local
+# `wrangler dev`. Never commit .dev.vars.
+#
+# Forwarded to the container via JobCoordinatorDO's envVars; checked by the
+# container's /run endpoint as a defense-in-depth shared secret (docs/api.md #2).
+WORKER_SHARED_SECRET=change-me-in-local-dev-only

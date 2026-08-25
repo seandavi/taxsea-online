@@ -4,9 +4,22 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "lint": "echo 'lint: no-op (scaffolding, M1) — wired up when src/ lands' && exit 0",
-    "typecheck": "echo 'typecheck: no-op (scaffolding, M1) — wired up when src/ lands' && exit 0",
-    "test": "echo 'test: no-op (scaffolding, M1) — wired up when src/ lands' && exit 0",
-    "build": "echo 'build: no-op (scaffolding, M1) — wired up when src/ lands' && exit 0"
+    "dev": "wrangler dev",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p test/tsconfig.json",
+    "test": "vitest run",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.0.0",
+    "eslint": "^10.9.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.68.0",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.125.0"
   }
 }

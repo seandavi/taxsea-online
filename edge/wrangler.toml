@@ -1,0 +1,66 @@
+name = "taxsea-online"
+main = "src/index.ts"
+# Set this to today's date when bumping runtime compatibility behavior.
+compatibility_date = "2026-08-20"
+
+# This file deploys the whole Cloudflare side of the project in one `wrangler deploy`:
+# the Worker, JobCoordinatorDO, the compute container image (built from
+# /worker/Dockerfile), the R2 binding, and the built SPA. There is no second deploy
+# target (PLAN.md #2.1, #2.2, #3).
+
+# `Container` (from @cloudflare/containers) extends `DurableObject`, so
+# `JobCoordinatorDO` is simultaneously the job coordinator and the container-backed
+# class -- one class_name in both [[containers]] and [[durable_objects.bindings]].
+[[containers]]
+class_name = "JobCoordinatorDO"
+image = "../worker/Dockerfile"
+# Tunable: "lite", "basic", "standard-1".."standard-4", or a custom
+# { vcpu, memory_mib, disk_mb } object. standard-1 = 0.5 vCPU / 4 GiB memory / 8 GB
+# disk. The disk must fit the built image size recorded in /worker/README.md --
+# bump the tier (or disk size) if that recorded size approaches 8 GB.
+instance_type = "standard-1"
+# Hard ceiling on concurrent container instances -- the primary spend control for a
+# public compute endpoint (PLAN.md #7, "Cost of a public compute endpoint").
+max_instances = 10
+
+[[durable_objects.bindings]]
+name = "JOB_COORDINATOR"
+class_name = "JobCoordinatorDO"
+
+[[migrations]]
+tag = "v1"
+# Container-backed Durable Objects require the SQLite storage backend --
+# new_classes (key-value backend) does not work here.
+new_sqlite_classes = ["JobCoordinatorDO"]
+
+[[r2_buckets]]
+binding = "TAXSEA_BUCKET"
+bucket_name = "taxsea-jobs"
+preview_bucket_name = "taxsea-jobs-preview"
+
+# Keyed on CF-Connecting-IP for POST /api/jobs only (docs/api.md #6). Read endpoints
+# are unlimited. max_instances above is the real hard ceiling; this just smooths
+# per-IP bursts.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 10
+  period = 60
+
+# One Worker serves the API and the SPA from the same origin -- see the design note
+# in issue #8: no CORS middleware needed.
+[assets]
+directory = "../frontend/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[vars]
+JOB_TIMEOUT_MS = 300000
+MAX_TAXA = 5000
+
+# The only secret this project uses. Set with `wrangler secret put WORKER_SHARED_SECRET`
+# -- never committed. Forwarded to the container via JobCoordinatorDO's envVars.
+# No R2 credentials are configured anywhere: the Worker and DO use the native R2
+# binding above, and the container has no storage access at all (PLAN.md #2.6).
