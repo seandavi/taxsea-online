@@ -1,5 +1,22 @@
 # TaxSEA-online
 
+> [!IMPORTANT]
+> **Active development has moved to [seandavi/taxonset-db](https://github.com/seandavi/taxonset-db).**
+>
+> Landscape research done on 2026-08-25 — which had never been done for this project —
+> established that TaxSEA already ships an official web portal at <https://shiny.taxsea.app>,
+> advertised in the TaxSEA paper's own Data Availability statement and verifiably live. "Run
+> TaxSEA in a browser" was therefore not an unmet need, and could not be this project's
+> contribution.
+>
+> The work moved to what is actually missing: a curated taxon set database with harmonised
+> name resolution and per-set provenance. See [`docs/landscape.md`](docs/landscape.md) for the
+> evidence and [`PLAN.md` §8.5](PLAN.md) for the decision.
+>
+> **This service remains deployed and working**, and this repository remains the record of how
+> it was built. It is not archived, and the security and correctness work here still applies
+> while it runs. But new feature work happens in the new repository.
+
 An asynchronous web service for taxon-set enrichment analysis using the Bioconductor package
 [TaxSEA](https://bioconductor.org/packages/TaxSEA/). Users submit a ranked or unranked taxon
 list from a React SPA, the job runs in an on-demand Cloudflare Container, and results stream
