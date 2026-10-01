@@ -157,7 +157,7 @@ function withSecurityHeaders(response: Response): Response {
   const headers = new Headers(response.headers);
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("Referrer-Policy", "no-referrer");
-  // googletagmanager.com is allowlisted for the GA4 loader tag in frontend/index.html; the
+  // googletagmanager.com is allowlisted for the GA4 loader injected by frontend/src/analytics.ts; the
   // gtag config it needs lives in the bundle (frontend/src/analytics.ts), so 'unsafe-inline'
   // is deliberately NOT granted. connect-src/img-src cover where GA actually reports to.
   headers.set(

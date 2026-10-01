@@ -4,13 +4,22 @@
 // module instead of index.html on purpose: the Worker serves HTML with
 // `script-src 'self'` (edge/src/index.ts, issue #11), which blocks inline scripts. Keeping
 // the config here means it ships inside the bundle -- same-origin, so it runs without
-// having to weaken the CSP with 'unsafe-inline'. The loader tag in index.html still points
-// at googletagmanager.com, which is why that host is allowlisted in script-src.
+// having to weaken the CSP with 'unsafe-inline'. The gtag.js loader is injected from here
+// too (only on the production host), from googletagmanager.com, which is why that host is
+// allowlisted in script-src.
 //
 // ponytail: no consent banner. Add one if this ever serves EU traffic under a policy that
 // needs it -- GA4 has Consent Mode for exactly that.
 
-export const GA_MEASUREMENT_ID = 'G-DHNFGES97B';
+export const GA_MEASUREMENT_ID = 'G-KLLV1GCF4E';
+export const GA_CONTENT_GROUP = 'taxsea';
+
+// Production is itself a workers.dev host; preview versions are `<hash>-taxsea-online...`.
+const PRODUCTION_HOST = 'taxsea-online.seandavi.workers.dev';
+
+export function isProductionHost(hostname: string): boolean {
+  return hostname === PRODUCTION_HOST;
+}
 
 declare global {
   interface Window {
@@ -18,7 +27,12 @@ declare global {
   }
 }
 
-export function initAnalytics(): void {
+export function initAnalytics(hostname: string = window.location.hostname): void {
+  if (!isProductionHost(hostname)) return;
+  const loader = document.createElement('script');
+  loader.async = true;
+  loader.src = `https://www.googletagmanager.com/gtag/js?id=${GA_MEASUREMENT_ID}`;
+  document.head.appendChild(loader);
   window.dataLayer = window.dataLayer || [];
   // Pushes the `arguments` object itself, exactly as Google's snippet does. This looks like
   // something a rest parameter should replace, and it isn't: gtag.js only treats an
@@ -31,5 +45,5 @@ export function initAnalytics(): void {
     window.dataLayer.push(arguments);
   } as (...args: unknown[]) => void;
   gtag('js', new Date());
-  gtag('config', GA_MEASUREMENT_ID);
+  gtag('config', GA_MEASUREMENT_ID, { content_group: GA_CONTENT_GROUP });
 }
